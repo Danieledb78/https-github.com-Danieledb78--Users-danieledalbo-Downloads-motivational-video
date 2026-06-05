@@ -23,7 +23,7 @@ Secrets Replit:
   EMAIL_2_LABEL ...  (aggiungi quanti account vuoi)
 """
 
-import os, json, smtplib, tempfile, logging, asyncio
+import os, sys, json, smtplib, tempfile, logging, asyncio
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +39,7 @@ from telegram.ext import (
 
 import agent_renergy
 import agent_acm
+import bot_campagna
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -491,6 +492,10 @@ async def handler_testo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = sessione(chat_id)
     testo = update.message.text.strip()
 
+    # Delega al campaign handler se è in corso un wizard campagna
+    if await bot_campagna.handler_testo_campagna(update, ctx):
+        return
+
     if s["stato"] == "attesa_modifica_email":
         idx = s["email_modifica_idx"]
         s["email_drafts"][idx]["corpo"] = testo
@@ -568,6 +573,12 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     data    = q.data
     s       = sessione(chat_id)
+
+    # Delega al campaign handler se il callback riguarda le campagne
+    if data.startswith("camp_"):
+        await bot_campagna.handler_callback_campagna(update, ctx)
+        return
+
     await q.answer()
 
     if data.startswith("mittente_"):
@@ -654,9 +665,12 @@ def main():
 
     log.info(f"Bot avviato | Email account: {len(EMAIL_ACCOUNTS)}")
 
+    # Inizializza il modulo campagne passando questo modulo come riferimento
+    bot_campagna.init(sys.modules[__name__])
+
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Comandi
+    # Comandi base
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("annulla",  cmd_annulla))
     app.add_handler(CommandHandler("mittente", cmd_mittente))
@@ -666,12 +680,19 @@ def main():
     app.add_handler(CommandHandler("lead",     cmd_lead))
     app.add_handler(CommandHandler("stato",    cmd_stato))
 
+    # Comandi campagne e mercato
+    bot_campagna.registra_handlers(app)
+
     # Messaggi
     app.add_handler(MessageHandler(filters.VOICE,                   handler_vocale))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler_testo))
     app.add_handler(CallbackQueryHandler(handler_callback))
 
-    # Briefing automatico — ogni lunedì alle 07:00
+    # Job schedulati campagne
+    app.job_queue.run_daily(bot_campagna.job_mercato,   time=dt_time(8,  0), days=(1,))          # martedì 08:00
+    app.job_queue.run_daily(bot_campagna.job_sequenze,  time=dt_time(8, 30), days=tuple(range(7))) # ogni giorno 08:30
+
+    # Briefing agenti — ogni lunedì alle 07:00
     app.job_queue.run_daily(
         briefing_mattutino,
         time=dt_time(7, 0, 0),
