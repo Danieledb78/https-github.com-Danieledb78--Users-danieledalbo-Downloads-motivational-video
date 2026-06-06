@@ -60,7 +60,7 @@ def creset(chat_id: int):
 # ---------------------------------------------------------------------------
 # Tastiere
 # ---------------------------------------------------------------------------
-AZIENDE = ["Renergy Project&Build", "ACM&Partners", "BevManager", "Combinata"]
+AZIENDE = ["Renergy Project&Build", "ACM&Partners", "RS Gas&Power", "Combinata"]
 
 def kb_aziende() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([

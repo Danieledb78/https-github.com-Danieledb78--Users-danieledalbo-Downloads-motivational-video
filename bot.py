@@ -1,17 +1,48 @@
 """
-bot.py — Bot Telegram Unificato
-Combina: agenti lead generation + appunti vocali → email + briefing automatico
+bot.py — Bot Telegram Unificato — Sistema Agenti AI Completo
+Aziende: Renergy Project&Build | ACM&Partners | RS Gas&Power
 
-Comandi disponibili:
+Comandi agenti core:
   /run_all    → lancia Renergy + ACM, manda briefing al termine
   /renergy    → solo agente Renergy
   /acm        → solo agente ACM
   /lead       → ultimi lead creati in Hub
+
+Campagne & Mercato:
+  /nuova_campagna  → wizard nuova campagna outbound
+  /campagne        → lista campagne esistenti
+  /mercato         → market intelligence on-demand
+  /risposte        → legge e classifica risposte email campagne
+
+Task Tracker:
+  /task       → crea task da testo o vocale
+  /tasks      → lista task aperti
+  /tasks_az   → task per azienda specifica
+
+Content & SEO:
+  /content    → genera contenuti LinkedIn/blog
+  /contenuti  → lista contenuti in coda
+  /seo        → analisi SEO settimanale
+
+Competitor & ESG:
+  /competitor → monitoraggio competitor
+  /esg        → monitor normativa ESG/CSRD
+  /esg_cal    → calendario scadenze ESG
+
+Report:
+  /report     → report KPI settimanale
+  /rsgas      → aggiorna KPI RS Gas&Power
+
+Newsletter:
+  /newsletter → genera bozze newsletter
+  /nl_stats   → statistiche newsletter
+  /nl_iscrivi → aggiungi iscritto
+  /nl_invia   → invia issue approvata
+
+Sistema:
   /stato      → stato sistema e account configurati
   /mittente   → cambia account email di invio
   /annulla    → annulla sessione corrente
-
-Messaggio vocale o testo libero → estrae azioni → bozze email → invio approvato
 
 Secrets Replit:
   TELEGRAM_BOT_TOKEN     TELEGRAM_OWNER_ID
@@ -20,7 +51,9 @@ Secrets Replit:
   HUB_EMAIL              HUB_PASSWORD
   EMAIL_1_LABEL          EMAIL_1_ADDRESS      EMAIL_1_PASSWORD
   EMAIL_1_SMTP_HOST      EMAIL_1_SMTP_PORT    EMAIL_1_SSL
+  EMAIL_1_IMAP_HOST      EMAIL_1_IMAP_PORT    (opzionale per IMAP)
   EMAIL_2_LABEL ...  (aggiungi quanti account vuoi)
+  NEWSLETTER_RENERGY_EMAIL  NEWSLETTER_ACM_EMAIL  (opzionale)
 """
 
 import os, sys, json, smtplib, tempfile, logging, asyncio
@@ -40,6 +73,14 @@ from telegram.ext import (
 import agent_renergy
 import agent_acm
 import bot_campagna
+import agent_task_tracker   as att
+import agent_risposte_email as are
+import agent_content        as acnt
+import agent_seo            as aseo
+import agent_competitor     as acomp
+import agent_report         as arep
+import agent_esg_monitor    as aesg
+import newsletter_manager   as nm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -57,7 +98,7 @@ HUB_PASS   = os.environ.get("HUB_PASSWORD")
 
 claude  = anthropic.Anthropic(api_key=CLAUDE_KEY)
 whisper = OpenAI(api_key=OPENAI_KEY)
-executor = ThreadPoolExecutor(max_workers=2)
+executor = ThreadPoolExecutor(max_workers=4)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +136,8 @@ def sessione(chat_id: int) -> dict:
             "email_drafts": [], "email_idx": 0,
             "email_modifica_idx": 0, "email_dest_idx": 0,
             "from_account": EMAIL_ACCOUNTS[0] if EMAIL_ACCOUNTS else None,
+            # Task tracker state
+            "task_step": "idle", "task_drafts": [],
         }
     return sessions[chat_id]
 
@@ -126,7 +169,6 @@ def hub_token() -> str:
 def hub_ultimi_lead(n: int = 10) -> list[dict]:
     import requests as req
     token = hub_token()
-    # Prova endpoint più comuni per lista lead
     for endpoint in ["/crm/lead", "/crm/leads", "/crm/lead/list"]:
         try:
             r = req.get(f"{HUB_BASE}{endpoint}",
@@ -159,7 +201,8 @@ async def trascrivi_vocale(file_telegram) -> str:
 # ---------------------------------------------------------------------------
 # Claude — estrazione azioni
 # ---------------------------------------------------------------------------
-PROMPT_AZIONI = """Sei l'assistente personale di un imprenditore italiano con più società (Renergy, ACM&Partners, BevManager).
+PROMPT_AZIONI = """Sei l'assistente personale di un imprenditore italiano con più società
+(Renergy Project&Build, ACM&Partners, RS Gas&Power).
 Ha registrato appunti dopo una serie di appuntamenti.
 
 APPUNTI:
@@ -170,14 +213,14 @@ Estrai tutte le azioni e le email da inviare. Rispondi SOLO con JSON valido:
   "riepilogo": "2-3 righe di riepilogo compatto",
   "azioni": [
     {{
-      "società": "Renergy | ACM&Partners | BevManager | altra",
+      "società": "Renergy Project&Build | ACM&Partners | RS Gas&Power | altra",
       "contatto_incontrato": "nome/azienda",
       "descrizione": "cosa va fatto",
       "destinatario_nome": "a chi va assegnato",
       "destinatario_email": "email se menzionata, altrimenti null",
       "scadenza": "quando",
       "priorità": "alta | media | bassa",
-      "tipo": "email_collaboratore | email_cliente | reminder | altro"
+      "tipo": "email_collaboratore | email_cliente | reminder | task | altro"
     }}
   ]
 }}"""
@@ -272,6 +315,26 @@ def kb_mittente() -> InlineKeyboardMarkup:
         for i, a in enumerate(EMAIL_ACCOUNTS)
     ])
 
+def kb_task_conferma(task_list: list) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Salva tutti", callback_data="task_salva_ok"),
+        InlineKeyboardButton("🗑 Annulla",    callback_data="annulla"),
+    ]])
+
+def kb_content_item(cnt_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approva",  callback_data=f"cnt_approva_{cnt_id}"),
+        InlineKeyboardButton("📋 Vedi",    callback_data=f"cnt_vedi_{cnt_id}"),
+        InlineKeyboardButton("🗑 Scarta",  callback_data=f"cnt_scarta_{cnt_id}"),
+    ]])
+
+def kb_newsletter(issue_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approva",  callback_data=f"nl_approva_{issue_id}"),
+        InlineKeyboardButton("📋 Anteprima",callback_data=f"nl_vedi_{issue_id}"),
+        InlineKeyboardButton("📤 Invia",   callback_data=f"nl_invia_{issue_id}"),
+    ]])
+
 def formatta_azione(a: dict, i: int) -> str:
     emoji = {"alta":"🔴","media":"🟡","bassa":"🟢"}.get(a.get("priorità",""),"⚪")
     dest  = a.get("destinatario_email") or "⚠️ email mancante"
@@ -305,7 +368,6 @@ def formatta_briefing(ora: str, sr: dict, sa: dict) -> str:
 # Runner agenti in background
 # ---------------------------------------------------------------------------
 async def run_agente_bg(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, agente, nome: str):
-    """Lancia un agente in thread separato e manda il risultato su Telegram."""
     loop = asyncio.get_event_loop()
     await ctx.bot.send_message(chat_id, f"⏳ Agente *{nome}* avviato...", parse_mode="Markdown")
     try:
@@ -327,15 +389,13 @@ async def run_agente_bg(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, agente, no
 
 
 # ---------------------------------------------------------------------------
-# Comando /run_all
+# Comandi lead generation
 # ---------------------------------------------------------------------------
 @solo_owner
 async def cmd_run_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("🚀 Avvio entrambi gli agenti...")
     loop = asyncio.get_event_loop()
-
-    # Lancia in parallelo
     sr, sa = await asyncio.gather(
         loop.run_in_executor(executor, agent_renergy.run),
         loop.run_in_executor(executor, agent_acm.run),
@@ -343,10 +403,8 @@ async def cmd_run_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     if isinstance(sr, Exception): sr = {"create_hub":0,"valore_totale":0,"scartate_solare":0}
     if isinstance(sa, Exception): sa = {"create_hub":0,"scartate":0}
-
     ora = datetime.now().strftime("%d/%m/%Y %H:%M")
     await update.message.reply_text(formatta_briefing(ora, sr, sa), parse_mode="MarkdownV2")
-
 
 @solo_owner
 async def cmd_renergy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -356,10 +414,6 @@ async def cmd_renergy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_acm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await run_agente_bg(ctx, update.effective_chat.id, agent_acm, "ACM")
 
-
-# ---------------------------------------------------------------------------
-# Comando /lead
-# ---------------------------------------------------------------------------
 @solo_owner
 async def cmd_lead(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Recupero ultimi lead da Hub...")
@@ -386,7 +440,247 @@ async def cmd_lead(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# Comando /stato
+# Comandi risposte email campagne
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_risposte(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("📬 Controllo risposte email in arrivo...")
+    loop = asyncio.get_event_loop()
+    try:
+        nuove = await loop.run_in_executor(executor, are.run)
+        if not nuove:
+            # Mostra quelle in attesa di gestione
+            in_attesa = are.get_risposte_da_gestire()
+            if not in_attesa:
+                await msg.edit_text("✅ Nessuna risposta email da gestire.")
+                return
+            await msg.edit_text(f"📬 *{len(in_attesa)} risposte da gestire:*", parse_mode="Markdown")
+            for r in in_attesa[:5]:
+                await update.effective_message.reply_text(
+                    are.formatta_risposta(r), parse_mode="Markdown"
+                )
+            return
+        await msg.edit_text(f"✅ *{len(nuove)} nuove risposte classificate:*", parse_mode="Markdown")
+        for r in nuove[:5]:
+            await update.effective_message.reply_text(are.formatta_risposta(r), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi Task Tracker
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_task(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Crea un task da testo libero."""
+    s = sessione(update.effective_chat.id)
+    s["task_step"] = "attendi_task_testo"
+    await update.message.reply_text(
+        "📋 *Nuovo Task*\n\nDescrivimi il task da creare "
+        "(anche in modo informale, lo elaboro io):\n\n"
+        "Es: _Chiamare Marco di Rossi SpA entro venerdì per il preventivo Renergy_\n"
+        "_Prepara report ESG per cliente ACM entro 15 giugno_",
+        parse_mode="Markdown"
+    )
+
+@solo_owner
+async def cmd_tasks(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    tasks = att.get_tasks_aperti()
+    if not tasks:
+        await update.message.reply_text("✅ Nessun task aperto al momento.")
+        return
+    testo = att.formatta_lista_tasks(tasks, "Task Aperti")
+    await update.message.reply_text(testo, parse_mode="Markdown")
+
+@solo_owner
+async def cmd_tasks_az(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    aziende_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Renergy",    callback_data="tasks_az_Renergy Project&Build")],
+        [InlineKeyboardButton("🏢 ACM",       callback_data="tasks_az_ACM&Partners")],
+        [InlineKeyboardButton("⚡🔵 RS Gas",  callback_data="tasks_az_RS Gas&Power")],
+        [InlineKeyboardButton("📋 Tutti",     callback_data="tasks_az_tutti")],
+    ])
+    await update.message.reply_text("Seleziona azienda:", reply_markup=aziende_kb)
+
+
+# ---------------------------------------------------------------------------
+# Comandi Content
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("✍️ Genero contenuti LinkedIn e blog...")
+    loop = asyncio.get_event_loop()
+    try:
+        creati = await loop.run_in_executor(executor, acnt.run)
+        if not creati:
+            await msg.edit_text("⚠️ Nessun contenuto generato (verifica i feed RSS).")
+            return
+        await msg.edit_text(f"✅ *{len(creati)} contenuti generati e in coda:*", parse_mode="Markdown")
+        for c in creati:
+            await update.effective_message.reply_text(
+                acnt.formatta_preview_contenuto(c),
+                reply_markup=kb_content_item(c["id"]),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_contenuti(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    in_attesa = acnt.get_contenuti_in_attesa()
+    if not in_attesa:
+        await update.message.reply_text("✅ Nessun contenuto in coda.")
+        return
+    await update.message.reply_text(f"📝 *{len(in_attesa)} contenuti in attesa:*", parse_mode="Markdown")
+    for c in in_attesa[:5]:
+        await update.effective_message.reply_text(
+            acnt.formatta_preview_contenuto(c),
+            reply_markup=kb_content_item(c["id"]),
+            parse_mode="Markdown"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Comandi SEO
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_seo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔍 Analisi SEO in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        reports = await loop.run_in_executor(executor, aseo.run)
+        if not reports:
+            await msg.edit_text("⚠️ Nessun report SEO generato.")
+            return
+        await msg.edit_text(f"✅ Report SEO generati per {len(reports)} aziende:")
+        for r in reports:
+            await update.effective_message.reply_text(aseo.formatta_report_seo(r), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi Competitor
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_competitor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🕵️ Monitoraggio competitor in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        alerts = await loop.run_in_executor(executor, acomp.run)
+        if not alerts:
+            await msg.edit_text("✅ Nessun alert significativo dai competitor.")
+            return
+        await msg.edit_text(f"⚠️ *{len(alerts)} alert competitor:*", parse_mode="Markdown")
+        for a in alerts[:4]:
+            await update.effective_message.reply_text(acomp.formatta_alert(a), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi Report
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("📊 Genero report KPI settimanale...")
+    loop = asyncio.get_event_loop()
+    try:
+        report = await loop.run_in_executor(executor, arep.run)
+        testo  = arep.formatta_report(report)
+        await msg.edit_text(testo, parse_mode="MarkdownV2")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_rsgas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    s = sessione(update.effective_chat.id)
+    s["stato"] = "attesa_rsgas"
+    kpi_attuali = arep.get_kpi_rsgas()
+    await update.message.reply_text(
+        f"⚡🔵 *Aggiorna KPI RS Gas&Power*\n\n"
+        f"KPI attuali: {json.dumps(kpi_attuali, ensure_ascii=False)}\n\n"
+        "Invia i nuovi dati come JSON:\n"
+        '`{"contratti_attivi": 150, "nuovi_clienti_mese": 12, "churn_mese": 3, "note": "..."}`',
+        parse_mode="Markdown"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comandi ESG Monitor
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_esg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🌿 Analisi ESG/CSRD in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        _, briefing = await loop.run_in_executor(executor, aesg.run)
+        if not briefing:
+            await msg.edit_text("ℹ️ Nessun aggiornamento ESG significativo rispetto all'ultima analisi.")
+            return
+        await msg.edit_text(briefing, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_esg_cal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(aesg.formatta_scadenze(), parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
+# Comandi Newsletter
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_newsletter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("📬 Genero bozze newsletter...")
+    loop = asyncio.get_event_loop()
+    try:
+        bozze = await loop.run_in_executor(executor, nm.run)
+        if not bozze:
+            # Mostra bozze in attesa
+            in_attesa = nm.get_bozze_in_attesa()
+            if not in_attesa:
+                await msg.edit_text("✅ Nessuna bozza in attesa. Tutte già approvate o inviate.")
+                return
+            await msg.edit_text(f"📝 *{len(in_attesa)} bozze in attesa di approvazione:*",
+                                 parse_mode="Markdown")
+            for b in in_attesa[:3]:
+                await update.effective_message.reply_text(
+                    nm.formatta_preview_newsletter(b),
+                    reply_markup=kb_newsletter(b["id"]),
+                    parse_mode="Markdown"
+                )
+            return
+        await msg.edit_text(f"✅ *{len(bozze)} bozze newsletter generate:*", parse_mode="Markdown")
+        for b in bozze:
+            await update.effective_message.reply_text(
+                nm.formatta_preview_newsletter(b),
+                reply_markup=kb_newsletter(b["id"]),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_nl_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(nm.formatta_stats_newsletter(), parse_mode="Markdown")
+
+@solo_owner
+async def cmd_nl_iscrivi(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    s = sessione(update.effective_chat.id)
+    s["stato"] = "attesa_nl_iscrizione"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Renergy Energy Update", callback_data="nl_lista_Renergy")],
+        [InlineKeyboardButton("🏢 ACM ESG Insights",     callback_data="nl_lista_ACM")],
+    ])
+    await update.message.reply_text(
+        "📬 *Aggiungi iscritto newsletter*\nSeleziona la newsletter:", reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comandi base
 # ---------------------------------------------------------------------------
 @solo_owner
 async def cmd_stato(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -396,36 +690,59 @@ async def cmd_stato(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     maps    = "✅" if os.environ.get("GOOGLE_MAPS_KEY") else "❌ (Vision disabilitata)"
     hub     = "✅" if os.environ.get("HUB_EMAIL")       else "❌"
     email_n = len(EMAIL_ACCOUNTS)
+    nl_stats = nm.get_stats_newsletter()
+    nl_txt   = " | ".join(f"{k}: {v['iscritti']}" for k,v in nl_stats.items())
     s = sessione(update.effective_chat.id)
     mittente = s["from_account"]["label"] if s["from_account"] else "non configurato"
-    testo = (f"🔧 *Stato Sistema*\n\n"
+    testo = (f"🔧 *Stato Sistema — {datetime.now().strftime('%d/%m/%Y %H:%M')}*\n\n"
              f"Apollo API: {apollo}\nClaude API: {claude_}\n"
              f"OpenAI Whisper: {openai_}\nGoogle Maps: {maps}\n"
              f"Hub CRM: {hub}\n\n"
              f"📤 Account email: {email_n} configurati\n"
-             f"Mittente attivo: *{mittente}*")
+             f"Mittente attivo: *{mittente}*\n\n"
+             f"📬 Newsletter iscritti: {nl_txt or 'nessuno'}\n"
+             f"📋 Task aperti: {len(att.get_tasks_aperti())}\n"
+             f"📝 Contenuti in coda: {len(acnt.get_contenuti_in_attesa())}")
     await update.message.reply_text(testo, parse_mode="Markdown")
 
-
-# ---------------------------------------------------------------------------
-# Comando /mittente, /annulla, /start
-# ---------------------------------------------------------------------------
 @solo_owner
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_sessione(update.effective_chat.id)
     await update.message.reply_text(
-        "👋 *Bot Agenti AI* — tutto in un posto\\!\n\n"
-        "📋 *Comandi agenti:*\n"
-        "/run\\_all — lancia Renergy \\+ ACM\n"
-        "/renergy — solo agente Renergy\n"
-        "/acm — solo agente ACM\n"
-        "/lead — ultimi lead in Hub\n"
-        "/stato — stato sistema\n\n"
+        "👋 *Bot Agenti AI — Sistema Completo*\n\n"
+        "🔍 *Lead Generation:*\n"
+        "/run\\_all — Renergy \\+ ACM\n"
+        "/renergy — solo Renergy\n"
+        "/acm — solo ACM\n"
+        "/lead — ultimi lead in Hub\n\n"
+        "📬 *Campagne & Mercato:*\n"
+        "/nuova\\_campagna — crea campagna outbound\n"
+        "/campagne — lista campagne\n"
+        "/mercato — market intelligence\n"
+        "/risposte — risposte email campagne\n\n"
+        "📋 *Task Tracker:*\n"
+        "/task — crea task da testo\n"
+        "/tasks — lista task aperti\n\n"
+        "✍️ *Content & SEO:*\n"
+        "/content — genera post LinkedIn/blog\n"
+        "/contenuti — coda contenuti\n"
+        "/seo — analisi SEO\n\n"
+        "🕵️ *Intelligence:*\n"
+        "/competitor — monitor competitor\n"
+        "/esg — monitor ESG/CSRD\n"
+        "/esg\\_cal — calendario scadenze ESG\n\n"
+        "📊 *Report:*\n"
+        "/report — KPI settimanale\n"
+        "/rsgas — aggiorna KPI RS Gas\\&Power\n\n"
+        "📨 *Newsletter:*\n"
+        "/newsletter — genera/gestisci bozze\n"
+        "/nl\\_stats — statistiche newsletter\n"
+        "/nl\\_iscrivi — aggiungi iscritto\n\n"
         "🎙️ *Appunti → Email:*\n"
-        "Manda un vocale o testo con i tuoi appunti\\. "
-        "Estraggo le azioni e preparo le email\\.\n\n"
+        "Manda vocale o testo con i tuoi appunti\n\n"
         "/mittente — cambia account invio\n"
-        "/annulla — annulla sessione corrente",
+        "/stato — stato sistema\n"
+        "/annulla — annulla sessione",
         parse_mode="MarkdownV2"
     )
 
@@ -447,7 +764,7 @@ async def cmd_mittente(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# Processa input (vocale o testo)
+# Processa input (vocale o testo) — appunti → email / task
 # ---------------------------------------------------------------------------
 async def processa_input(update: Update, testo: str, chat_id: int):
     s = sessione(chat_id)
@@ -496,6 +813,52 @@ async def handler_testo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await bot_campagna.handler_testo_campagna(update, ctx):
         return
 
+    # Task tracker — attesa testo task
+    if s.get("task_step") == "attendi_task_testo":
+        s["task_step"] = "idle"
+        msg = await update.message.reply_text("⏳ Elaboro il task...")
+        loop = asyncio.get_event_loop()
+        try:
+            tasks_draft = await loop.run_in_executor(executor, att.estrai_task_da_testo, testo)
+            s["task_drafts"] = tasks_draft
+            righe = ["📋 *Task estratti:*\n"]
+            for i, t in enumerate(tasks_draft):
+                righe.append(f"{i+1}. *{t.get('titolo','')}*\n"
+                             f"   👤 {t.get('assegnato_a','')} | 🏢 {t.get('azienda','')}\n"
+                             f"   ⏰ {t.get('scadenza','')} | 🎯 {t.get('priorita','')}")
+            await msg.edit_text("\n".join(righe), reply_markup=kb_task_conferma(tasks_draft),
+                                parse_mode="Markdown")
+        except Exception as e:
+            await msg.edit_text(f"❌ Errore task: {e}")
+        return
+
+    # RS Gas&Power KPI update
+    if s.get("stato") == "attesa_rsgas":
+        s["stato"] = "idle"
+        try:
+            dati = json.loads(testo)
+            arep.aggiorna_kpi_rsgas(dati)
+            await update.message.reply_text("✅ KPI RS Gas&Power aggiornati.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ JSON non valido: {e}")
+        return
+
+    # Newsletter — iscrizione manuale
+    if s.get("stato") == "attesa_nl_dati":
+        s["stato"] = "idle"
+        nl = s.pop("nl_lista", "Renergy")
+        parti = testo.split(",")
+        if len(parti) >= 2:
+            email_addr = parti[0].strip()
+            nome       = parti[1].strip()
+            azienda    = parti[2].strip() if len(parti) > 2 else ""
+            nm.iscrivi_lead(email_addr, nome, nl, fonte="telegram_manuale")
+            await update.message.reply_text(f"✅ {nome} ({email_addr}) iscritto a newsletter {nl}.")
+        else:
+            await update.message.reply_text("⚠️ Formato: email, nome, azienda")
+        return
+
+    # Modifica email
     if s["stato"] == "attesa_modifica_email":
         idx = s["email_modifica_idx"]
         s["email_drafts"][idx]["corpo"] = testo
@@ -574,13 +937,14 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data    = q.data
     s       = sessione(chat_id)
 
-    # Delega al campaign handler se il callback riguarda le campagne
+    # Delega al campaign handler
     if data.startswith("camp_"):
         await bot_campagna.handler_callback_campagna(update, ctx)
         return
 
     await q.answer()
 
+    # Mittente email
     if data.startswith("mittente_"):
         idx = int(data.split("_")[1])
         s["from_account"] = EMAIL_ACCOUNTS[idx]
@@ -590,6 +954,7 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reset_sessione(chat_id)
         await q.edit_message_text("🗑 Sessione annullata.")
 
+    # Azioni appunti
     elif data == "azioni_ok":
         await q.edit_message_text("✅ Preparo le email...")
         await mostra_email(update, chat_id, 0)
@@ -598,6 +963,7 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✏️ Scrivi le correzioni o riformula gli appunti:")
         s["stato"] = "idle"
 
+    # Approva/modifica/salta email
     elif data.startswith("email_approva_"):
         idx    = int(data.split("_")[2])
         azione = s["azioni"][idx]
@@ -611,7 +977,8 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 s["from_account"], to, draft["oggetto"], draft["corpo"]
             )
             azione["_inviata"] = True
-            await q.edit_message_text(f"✅ Email inviata a *{azione.get('destinatario_nome')}* ({to})", parse_mode="Markdown")
+            await q.edit_message_text(f"✅ Email inviata a *{azione.get('destinatario_nome')}* ({to})",
+                                       parse_mode="Markdown")
         except Exception as e:
             azione["_errore"] = True
             await q.edit_message_text(f"❌ Errore invio: {e}")
@@ -636,12 +1003,101 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(f"⏭ Email {idx+1} saltata.")
         await mostra_email(update, chat_id, idx + 1)
 
+    # Task tracker
+    elif data == "task_salva_ok":
+        tasks_draft = s.get("task_drafts", [])
+        salvati = 0
+        for t in tasks_draft:
+            try:
+                att.crea_task(
+                    titolo=t.get("titolo",""),
+                    descrizione=t.get("descrizione",""),
+                    assegnato_a=t.get("assegnato_a","Da assegnare"),
+                    assegnato_email=t.get("assegnato_email") or "",
+                    azienda=t.get("azienda","Generale"),
+                    scadenza_str=t.get("scadenza",""),
+                    priorita=t.get("priorita","media"),
+                )
+                salvati += 1
+            except Exception as e:
+                log.warning(f"Task save: {e}")
+        s["task_drafts"] = []
+        await q.edit_message_text(f"✅ {salvati} task salvati. Usa /tasks per vederli.")
+
+    # Tasks per azienda
+    elif data.startswith("tasks_az_"):
+        az = data[len("tasks_az_"):]
+        if az == "tutti":
+            tasks = att.get_tasks_aperti()
+            testo = att.formatta_lista_tasks(tasks, "Tutti i Task Aperti")
+        else:
+            tasks = att.get_tasks_aperti(az)
+            testo = att.formatta_lista_tasks(tasks, f"Task — {az}")
+        await q.edit_message_text(testo, parse_mode="Markdown")
+
+    # Content queue
+    elif data.startswith("cnt_approva_"):
+        cnt_id = data[len("cnt_approva_"):]
+        acnt.aggiorna_stato_contenuto(cnt_id, "approvato")
+        await q.edit_message_text(f"✅ Contenuto {cnt_id} approvato.")
+
+    elif data.startswith("cnt_vedi_"):
+        cnt_id = data[len("cnt_vedi_"):]
+        queue  = [c for c in acnt.carica_queue() if c["id"] == cnt_id]
+        if queue:
+            preview = acnt.formatta_preview_contenuto(queue[0], breve=False)
+            await q.edit_message_text(preview[:4000], parse_mode="Markdown")
+
+    elif data.startswith("cnt_scarta_"):
+        cnt_id = data[len("cnt_scarta_"):]
+        acnt.aggiorna_stato_contenuto(cnt_id, "scartato")
+        await q.edit_message_text(f"🗑 Contenuto {cnt_id} scartato.")
+
+    # Newsletter
+    elif data.startswith("nl_approva_"):
+        issue_id = data[len("nl_approva_"):]
+        nm.approva_issue(issue_id)
+        await q.edit_message_text(f"✅ Newsletter {issue_id} approvata. Usa /newsletter per inviarla.")
+
+    elif data.startswith("nl_vedi_"):
+        issue_id = data[len("nl_vedi_"):]
+        issue = nm.get_issue(issue_id)
+        if issue:
+            preview = nm.formatta_preview_newsletter(issue)
+            await q.edit_message_text(preview[:4000], parse_mode="Markdown")
+
+    elif data.startswith("nl_invia_"):
+        issue_id = data[len("nl_invia_"):]
+        await q.edit_message_text(f"📤 Invio newsletter {issue_id}...")
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(executor, nm.invia_issue, issue_id)
+            if result.get("errore"):
+                await q.edit_message_text(f"❌ {result['errore']}")
+            else:
+                await q.edit_message_text(
+                    f"✅ Newsletter inviata!\n📤 {result['inviati']} consegnate | ❌ {result['errori']} errori"
+                )
+        except Exception as e:
+            await q.edit_message_text(f"❌ Errore invio: {e}")
+
+    elif data.startswith("nl_lista_"):
+        nl = data[len("nl_lista_"):]
+        s["nl_lista"] = nl
+        s["stato"]    = "attesa_nl_dati"
+        await q.edit_message_text(
+            f"📬 Newsletter: *{nl}*\n\n"
+            "Invia i dati dell'iscritto:\n`email, nome, azienda`\n\n"
+            "Es: `mario.rossi@azienda.it, Mario Rossi, Rossi SpA`",
+            parse_mode="Markdown"
+        )
+
 
 # ---------------------------------------------------------------------------
-# Job schedulato — briefing mattutino
+# Job schedulati
 # ---------------------------------------------------------------------------
 async def briefing_mattutino(ctx: ContextTypes.DEFAULT_TYPE):
-    log.info("Briefing mattutino schedulato — avvio agenti...")
+    log.info("Briefing mattutino — avvio agenti lead gen...")
     loop = asyncio.get_event_loop()
     sr, sa = await asyncio.gather(
         loop.run_in_executor(executor, agent_renergy.run),
@@ -652,6 +1108,77 @@ async def briefing_mattutino(ctx: ContextTypes.DEFAULT_TYPE):
     if isinstance(sa, Exception): sa = {"create_hub":0,"scartate":0}
     ora = datetime.now().strftime("%d/%m/%Y %H:%M")
     await ctx.bot.send_message(OWNER_ID, formatta_briefing(ora, sr, sa), parse_mode="MarkdownV2")
+
+async def job_report_settimanale(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: report KPI settimanale")
+    loop = asyncio.get_event_loop()
+    try:
+        report = await loop.run_in_executor(executor, arep.run)
+        testo  = arep.formatta_report(report)
+        await ctx.bot.send_message(OWNER_ID, testo, parse_mode="MarkdownV2")
+    except Exception as e:
+        log.warning(f"Job report: {e}")
+
+async def job_esg_monitor(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: ESG monitor")
+    loop = asyncio.get_event_loop()
+    try:
+        _, briefing = await loop.run_in_executor(executor, aesg.run)
+        if briefing:
+            await ctx.bot.send_message(OWNER_ID, briefing, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job ESG: {e}")
+
+async def job_content(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: generazione contenuti settimanali")
+    loop = asyncio.get_event_loop()
+    try:
+        creati = await loop.run_in_executor(executor, acnt.run)
+        if creati:
+            testo = f"✍️ *{len(creati)} contenuti generati* e in coda per approvazione.\nUsa /contenuti per revisione."
+            await ctx.bot.send_message(OWNER_ID, testo, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job content: {e}")
+
+async def job_competitor(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: monitoraggio competitor")
+    loop = asyncio.get_event_loop()
+    try:
+        alerts = await loop.run_in_executor(executor, acomp.run)
+        if alerts:
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"🕵️ *{len(alerts)} alert competitor — urgenti:*",
+                parse_mode="Markdown"
+            )
+            for a in alerts[:3]:
+                await ctx.bot.send_message(OWNER_ID, acomp.formatta_alert(a), parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job competitor: {e}")
+
+async def job_task_reminder(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: task reminder")
+    try:
+        testo = att.genera_reminder_text()
+        if testo:
+            await ctx.bot.send_message(OWNER_ID, testo, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job task reminder: {e}")
+
+async def job_newsletter(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: generazione newsletter settimanale")
+    loop = asyncio.get_event_loop()
+    try:
+        bozze = await loop.run_in_executor(executor, nm.run)
+        if bozze:
+            nomi = ", ".join(b.get("subject","")[:30] for b in bozze)
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"📬 *Newsletter generate*\nBozze: {nomi}\nUsa /newsletter per approvare e inviare.",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        log.warning(f"Job newsletter: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +1192,6 @@ def main():
 
     log.info(f"Bot avviato | Email account: {len(EMAIL_ACCOUNTS)}")
 
-    # Inizializza il modulo campagne passando questo modulo come riferimento
     bot_campagna.init(sys.modules[__name__])
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -674,32 +1200,75 @@ def main():
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("annulla",  cmd_annulla))
     app.add_handler(CommandHandler("mittente", cmd_mittente))
+    app.add_handler(CommandHandler("stato",    cmd_stato))
+
+    # Lead generation
     app.add_handler(CommandHandler("run_all",  cmd_run_all))
     app.add_handler(CommandHandler("renergy",  cmd_renergy))
     app.add_handler(CommandHandler("acm",      cmd_acm))
     app.add_handler(CommandHandler("lead",     cmd_lead))
-    app.add_handler(CommandHandler("stato",    cmd_stato))
 
-    # Comandi campagne e mercato
+    # Campagne e mercato
     bot_campagna.registra_handlers(app)
+    app.add_handler(CommandHandler("risposte", cmd_risposte))
+
+    # Task tracker
+    app.add_handler(CommandHandler("task",     cmd_task))
+    app.add_handler(CommandHandler("tasks",    cmd_tasks))
+    app.add_handler(CommandHandler("tasks_az", cmd_tasks_az))
+
+    # Content & SEO
+    app.add_handler(CommandHandler("content",   cmd_content))
+    app.add_handler(CommandHandler("contenuti", cmd_contenuti))
+    app.add_handler(CommandHandler("seo",       cmd_seo))
+
+    # Competitor & ESG
+    app.add_handler(CommandHandler("competitor", cmd_competitor))
+    app.add_handler(CommandHandler("esg",        cmd_esg))
+    app.add_handler(CommandHandler("esg_cal",    cmd_esg_cal))
+
+    # Report
+    app.add_handler(CommandHandler("report",  cmd_report))
+    app.add_handler(CommandHandler("rsgas",   cmd_rsgas))
+
+    # Newsletter
+    app.add_handler(CommandHandler("newsletter", cmd_newsletter))
+    app.add_handler(CommandHandler("nl_stats",   cmd_nl_stats))
+    app.add_handler(CommandHandler("nl_iscrivi", cmd_nl_iscrivi))
 
     # Messaggi
     app.add_handler(MessageHandler(filters.VOICE,                   handler_vocale))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler_testo))
     app.add_handler(CallbackQueryHandler(handler_callback))
 
-    # Job schedulati campagne
-    app.job_queue.run_daily(bot_campagna.job_mercato,   time=dt_time(8,  0), days=(1,))          # martedì 08:00
-    app.job_queue.run_daily(bot_campagna.job_sequenze,  time=dt_time(8, 30), days=tuple(range(7))) # ogni giorno 08:30
+    # Scheduling
+    # Lead gen — lunedì 07:00
+    app.job_queue.run_daily(briefing_mattutino,    time=dt_time(7, 0),  days=(0,))
+    # Market intelligence — martedì 08:00
+    app.job_queue.run_daily(bot_campagna.job_mercato, time=dt_time(8, 0),  days=(1,))
+    # Sequenze email campagne — tutti i giorni 08:30
+    app.job_queue.run_daily(bot_campagna.job_sequenze, time=dt_time(8, 30), days=tuple(range(7)))
+    # Task reminder — tutti i giorni 09:00
+    app.job_queue.run_daily(job_task_reminder,     time=dt_time(9, 0),  days=tuple(range(7)))
+    # Report KPI settimanale — lunedì 07:30
+    app.job_queue.run_daily(job_report_settimanale, time=dt_time(7, 30), days=(0,))
+    # ESG monitor — mercoledì 09:00
+    app.job_queue.run_daily(job_esg_monitor,       time=dt_time(9, 0),  days=(2,))
+    # Content generation — giovedì 09:00
+    app.job_queue.run_daily(job_content,           time=dt_time(9, 0),  days=(3,))
+    # Competitor monitor — venerdì 09:00
+    app.job_queue.run_daily(job_competitor,        time=dt_time(9, 0),  days=(4,))
+    # Newsletter — venerdì 10:00
+    app.job_queue.run_daily(job_newsletter,        time=dt_time(10, 0), days=(4,))
+    # Risposte email campagne — ogni giorno 10:30
+    async def _job_risposte(ctx: ContextTypes.DEFAULT_TYPE):
+        loop = asyncio.get_event_loop()
+        nuove = await loop.run_in_executor(executor, are.run)
+        if nuove:
+            await ctx.bot.send_message(OWNER_ID, f"📬 {len(nuove)} nuove risposte email. Usa /risposte.")
+    app.job_queue.run_daily(_job_risposte, time=dt_time(10, 30), days=tuple(range(7)))
 
-    # Briefing agenti — ogni lunedì alle 07:00
-    app.job_queue.run_daily(
-        briefing_mattutino,
-        time=dt_time(7, 0, 0),
-        days=(0,),   # 0=lunedì, cambia in tuple(range(7)) per ogni giorno
-    )
-
-    log.info("In ascolto... (briefing automatico: lunedì 07:00)")
+    log.info("Sistema agenti AI avviato — scheduling attivo")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
