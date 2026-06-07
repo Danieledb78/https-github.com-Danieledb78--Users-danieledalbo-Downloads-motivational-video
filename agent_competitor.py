@@ -9,6 +9,7 @@ import os, json, logging, feedparser, hashlib
 from datetime import datetime
 from pathlib import Path
 import anthropic
+import shared_intelligence as si
 
 log = logging.getLogger(__name__)
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY")
@@ -124,6 +125,27 @@ def hash_notizie(notizie: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared intelligence — pubblica gli alert competitor rilevanti come insight
+# ---------------------------------------------------------------------------
+def _pubblica_insight(azienda: str, comp: dict, analisi: dict):
+    try:
+        livello = analisi.get("alert_level", "basso")
+        si.aggiungi_insight("agent_competitor", {
+            "azienda":             si.mappa_azienda(azienda),
+            "tipo":                "competitor",
+            "titolo":              f"{comp.get('nome','')}: {analisi.get('sintesi','')[:80]}",
+            "sintesi":             (analisi.get("sintesi", "") or "")[:200],
+            "dettaglio":           json.dumps(analisi.get("segnali_rilevanti", []), ensure_ascii=False),
+            "urgenza":             "alta" if livello == "alto" else ("media" if livello == "medio" else "bassa"),
+            "impatto_commerciale": "alto" if livello == "alto" else "medio",
+            "azioni_suggerite":    ["campagna_email", "contatto_diretto"],
+            "target_icp":          comp.get("nome", ""),
+        })
+    except Exception as e:
+        log.warning(f"Pubblicazione insight competitor fallita: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def run() -> list[dict]:
@@ -150,6 +172,7 @@ def run() -> list[dict]:
 
                 if analisi.get("alert_level") in ("alto", "medio"):
                     alerts.append(analisi)
+                    _pubblica_insight(azienda, comp, analisi)
                 log.info(f"Competitor analizzato: {azienda} / {comp['nome']}")
             except Exception as e:
                 log.warning(f"Competitor {comp['nome']}: {e}")

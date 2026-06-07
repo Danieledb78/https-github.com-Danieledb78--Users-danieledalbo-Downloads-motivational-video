@@ -10,6 +10,7 @@ import os, logging, json
 from datetime import datetime
 import feedparser
 import anthropic
+import shared_intelligence as si
 
 log = logging.getLogger(__name__)
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY")
@@ -168,6 +169,28 @@ def formatta_briefing_mercato(analisi: dict, data: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared intelligence — pubblica le opportunità di mercato come insight
+# ---------------------------------------------------------------------------
+def _pubblica_insight(analisi: dict):
+    urgenza_map = {"alta": "alta", "media": "media", "bassa": "bassa"}
+    for o in analisi.get("opportunita", [])[:3]:
+        try:
+            urgenza = urgenza_map.get(o.get("urgenza", "media"), "media")
+            si.aggiungi_insight("agent_mercato", {
+                "azienda":             si.mappa_azienda(o.get("azienda_suggerita", "")),
+                "tipo":                "mercato",
+                "titolo":              o.get("titolo", "")[:120],
+                "sintesi":             (o.get("descrizione", "") or "")[:200],
+                "dettaglio":           o.get("descrizione", ""),
+                "urgenza":             urgenza,
+                "impatto_commerciale": "alto" if urgenza == "alta" else "medio",
+                "azioni_suggerite":    ["campagna_email", "newsletter", "contenuto"],
+            })
+        except Exception as e:
+            log.warning(f"Pubblicazione insight mercato fallita: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def run() -> tuple[dict, str]:
@@ -180,6 +203,7 @@ def run() -> tuple[dict, str]:
     analisi  = analizza_mercato(notizie)
     data     = datetime.now().strftime("%d/%m/%Y")
     briefing = formatta_briefing_mercato(analisi, data)
+    _pubblica_insight(analisi)
     log.info("=== AGENTE MERCATO — completato ===")
     return analisi, briefing
 

@@ -1,0 +1,9 @@
+{
+  "name": "aios-pdf-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generazione PDF via Puppeteer/Chromium per i lead magnet AIOS (es. agent_leadmagnet_acm.py)",
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  }
+}

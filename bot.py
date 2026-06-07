@@ -82,6 +82,17 @@ import agent_report         as arep
 import agent_esg_monitor    as aesg
 import newsletter_manager   as nm
 
+# AIOS v2.0 — orchestratore commerciale e nuovi agenti
+import shared_intelligence    as si
+import agent_orchestratore    as aorch
+import agent_tariffe_rs       as atar
+import agent_incentivi_renergy as ainc
+import agent_crosssell        as acrs
+import agent_prospect_rsgas   as apros
+import agent_landing          as alanding
+import agent_leadmagnet_acm   as alm
+import agent_clienti          as aclienti
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
@@ -333,6 +344,40 @@ def kb_newsletter(issue_id: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton("✅ Approva",  callback_data=f"nl_approva_{issue_id}"),
         InlineKeyboardButton("📋 Anteprima",callback_data=f"nl_vedi_{issue_id}"),
         InlineKeyboardButton("📤 Invia",   callback_data=f"nl_invia_{issue_id}"),
+    ]])
+
+
+# ---------------------------------------------------------------------------
+# Tastiere AIOS v2.0 — orchestratore, landing, lead magnet
+# ---------------------------------------------------------------------------
+ORCH_AZIONE_CALLBACK = {
+    "campagna_email":   ("📧 Crea campagna",          "campagna"),
+    "newsletter":       ("📨 Vai a newsletter",        "newsletter"),
+    "landing_page":     ("🖥 Crea landing",            "landing"),
+    "contatto_diretto": ("📞 Segna contatto diretto",  "contatto"),
+}
+
+def kb_orchestra(prop_id: str, proposta: dict) -> InlineKeyboardMarkup:
+    azioni = []
+    for chiave in ("azione_primaria", "azione_secondaria"):
+        a = proposta.get(chiave)
+        if a in ORCH_AZIONE_CALLBACK and a not in azioni:
+            azioni.append(a)
+    righe = [[InlineKeyboardButton(ORCH_AZIONE_CALLBACK[a][0],
+                                   callback_data=f"orch_{ORCH_AZIONE_CALLBACK[a][1]}_{prop_id}")]
+             for a in azioni]
+    righe.append([InlineKeyboardButton("🗑 Ignora", callback_data=f"orch_ignora_{prop_id}")])
+    return InlineKeyboardMarkup(righe)
+
+def kb_landing_anteprima(land_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🚀 Deploy su Netlify", callback_data=f"land_deploy_{land_id}"),
+    ]])
+
+def kb_leadmagnet_anteprima(lm_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approva e archivia", callback_data=f"lm_approva_{lm_id}"),
+        InlineKeyboardButton("🗑 Scarta",             callback_data=f"lm_scarta_{lm_id}"),
     ]])
 
 def formatta_azione(a: dict, i: int) -> str:
@@ -607,6 +652,144 @@ async def cmd_rsgas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# Comandi AIOS v2.0 — orchestratore commerciale
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_orchestra(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🧠 Valuto gli insight e genero proposte commerciali...")
+    loop = asyncio.get_event_loop()
+    try:
+        proposte = await loop.run_in_executor(executor, aorch.run)
+        if not proposte:
+            await msg.edit_text("ℹ️ Nessun nuovo insight da valutare al momento.")
+            return
+        await msg.edit_text(f"🧠 *{len(proposte)} proposte commerciali generate:*", parse_mode="Markdown")
+        for p in proposte:
+            await update.effective_message.reply_text(
+                aorch.formatta_proposta(p["insight"], p["proposta"]),
+                reply_markup=kb_orchestra(p["prop_id"], p["proposta"]),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi AIOS v2.0 — RS Gas&Power: tariffe competitor & prospect
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_tariffe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⚡🔵 Monitoraggio tariffe competitor in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio, _ = await loop.run_in_executor(executor, atar.run)
+        if not messaggio:
+            await msg.edit_text("ℹ️ Tariffe invariate rispetto all'ultima rilevazione.")
+            return
+        await msg.edit_text(messaggio, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_prospect_rsgas(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⚡🔵 Ricerca nuovi prospect RS Gas&Power in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(executor, apros.run)
+        await msg.edit_text(apros.formatta_riepilogo(stats), parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi AIOS v2.0 — Renergy: incentivi e bandi (nazionali + Veneto/Trentino-AA/FVG)
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_incentivi(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text(
+        "🇮🇹 Ricerca incentivi e bandi (fonti nazionali + Veneto, Trentino-Alto Adige, "
+        "Friuli Venezia Giulia e relative province) in corso..."
+    )
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio, bozza = await loop.run_in_executor(executor, ainc.run)
+        if not messaggio:
+            await msg.edit_text("ℹ️ Nessuna novità sugli incentivi rispetto all'ultima rilevazione.")
+            return
+        await msg.edit_text(messaggio, parse_mode="Markdown")
+        if bozza:
+            await update.effective_message.reply_text(
+                f"✉️ *Bozza email cliente — incentivo rilevato*\n\n"
+                f"*Oggetto:* {bozza.get('oggetto','')}\n\n"
+                f"─────────────────\n{bozza.get('corpo','')}\n─────────────────",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi AIOS v2.0 — landing page & lead magnet PDF
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_landing(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🖥 Genero landing page dall'ultimo insight disponibile...")
+    loop = asyncio.get_event_loop()
+    try:
+        insights = si.get_insight_da_sfruttare(giorni_recenti=14)
+        if not insights:
+            await msg.edit_text("ℹ️ Nessun insight disponibile su cui basare una landing. "
+                                "Lancia prima un agente di analisi (es. /mercato, /esg, /competitor).")
+            return
+        entry = await loop.run_in_executor(executor, alanding.crea_bozza_landing, insights[0])
+        await msg.edit_text("✅ Bozza landing generata:")
+        await update.effective_message.reply_text(
+            alanding.formatta_anteprima(entry),
+            reply_markup=kb_landing_anteprima(entry["id"]),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_leadmagnet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("📄 Genero brief PDF lead magnet ACM (HTML → Puppeteer)...")
+    loop = asyncio.get_event_loop()
+    try:
+        entry, testo = await loop.run_in_executor(executor, alm.genera_brief)
+        if entry:
+            await msg.edit_text(testo, reply_markup=kb_leadmagnet_anteprima(entry["id"]), parse_mode="Markdown")
+        else:
+            await msg.edit_text(testo, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Comandi AIOS v2.0 — cross-sell & clienti esistenti (upsell/referral)
+# ---------------------------------------------------------------------------
+@solo_owner
+async def cmd_crosssell(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔄 Analisi opportunità di cross-sell tra le aziende in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio = await loop.run_in_executor(executor, acrs.run)
+        await msg.edit_text(messaggio, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+@solo_owner
+async def cmd_clienti(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("👥 Analisi upsell e referral su clienti esistenti in corso...")
+    loop = asyncio.get_event_loop()
+    try:
+        _, _, messaggio = await loop.run_in_executor(executor, aclienti.run)
+        await msg.edit_text(messaggio, parse_mode="Markdown")
+    except Exception as e:
+        await msg.edit_text(f"❌ Errore: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Comandi ESG Monitor
 # ---------------------------------------------------------------------------
 @solo_owner
@@ -734,6 +917,17 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📊 *Report:*\n"
         "/report — KPI settimanale\n"
         "/rsgas — aggiorna KPI RS Gas\\&Power\n\n"
+        "🧠 *AIOS — Cervello commerciale:*\n"
+        "/orchestra — proposte commerciali dagli insight\n"
+        "/landing — genera landing page \\+ deploy Netlify\n"
+        "/leadmagnet — brief PDF ESG per ACM \\(lead magnet\\)\n"
+        "/crosssell — opportunità cross\\-sell tra le aziende\n"
+        "/clienti — upsell \\& referral su clienti esistenti\n\n"
+        "⚡🔵 *RS Gas\\&Power — Intelligence:*\n"
+        "/tariffe — monitor tariffe competitor\n"
+        "/prospect\\_rsgas — nuovi prospect qualificati\n\n"
+        "🇮🇹 *Renergy — Incentivi:*\n"
+        "/incentivi — bandi nazionali \\+ Veneto/Trentino\\-AA/FVG\n\n"
         "📨 *Newsletter:*\n"
         "/newsletter — genera/gestisci bozze\n"
         "/nl\\_stats — statistiche newsletter\n"
@@ -1092,6 +1286,86 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+    # Orchestratore — decisione owner su una proposta commerciale
+    elif data.startswith("orch_"):
+        azione, _, prop_id = data[len("orch_"):].partition("_")
+        entry = aorch.get_proposta(prop_id)
+        if not entry:
+            await q.edit_message_text("⚠️ Proposta non trovata (forse troppo vecchia).")
+            return
+        insight = si.get_insight(entry.get("insight_id", ""))
+
+        if azione == "ignora":
+            aorch.registra_decisione(prop_id, "ignorata")
+            await q.edit_message_text("🗑 Proposta ignorata.")
+
+        elif azione == "landing":
+            aorch.registra_decisione(prop_id, "landing_page")
+            if not insight:
+                await q.edit_message_text("⚠️ Insight di origine non più disponibile.")
+                return
+            await q.edit_message_text("🖥 Genero la landing page...")
+            loop = asyncio.get_event_loop()
+            try:
+                land_entry = await loop.run_in_executor(executor, alanding.crea_bozza_landing, insight)
+                await update.effective_message.reply_text(
+                    alanding.formatta_anteprima(land_entry),
+                    reply_markup=kb_landing_anteprima(land_entry["id"]),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                await update.effective_message.reply_text(f"❌ Errore generazione landing: {e}")
+
+        elif azione == "campagna":
+            aorch.registra_decisione(prop_id, "campagna_email")
+            if insight:
+                try: si.segna_usato(insight["id"], "campagna")
+                except Exception: pass
+            await q.edit_message_text(
+                "📧 Ok — usa /nuova_campagna per creare la campagna basata su questa proposta."
+            )
+
+        elif azione == "newsletter":
+            aorch.registra_decisione(prop_id, "newsletter")
+            if insight:
+                try: si.segna_usato(insight["id"], "newsletter")
+                except Exception: pass
+            await q.edit_message_text("📨 Ok — usa /newsletter per generare e approvare la bozza.")
+
+        elif azione == "contatto":
+            aorch.registra_decisione(prop_id, "contatto_diretto")
+            if insight:
+                try: si.segna_usato(insight["id"], "contatto_diretto")
+                except Exception: pass
+            await q.edit_message_text("📞 Segnato come contatto diretto da gestire personalmente.")
+
+    # Landing page — deploy su Netlify
+    elif data.startswith("land_"):
+        azione, _, land_id = data[len("land_"):].partition("_")
+        if azione == "deploy":
+            await q.edit_message_text("🚀 Pubblico la landing su Netlify...")
+            loop = asyncio.get_event_loop()
+            try:
+                esito      = await loop.run_in_executor(executor, alanding.pubblica_landing, land_id)
+                land_entry = alanding.get_landing(land_id)
+                await q.edit_message_text(alanding.formatta_esito_deploy(esito, land_entry), parse_mode="Markdown")
+            except Exception as e:
+                await q.edit_message_text(f"❌ Errore deploy: {e}")
+
+    # Lead magnet PDF ACM — approvazione/scarto
+    elif data.startswith("lm_"):
+        azione, _, lm_id = data[len("lm_"):].partition("_")
+        if azione == "approva":
+            lm_entry = alm.approva_brief(lm_id)
+            if lm_entry:
+                await q.edit_message_text(alm.formatta_esito_approvazione(lm_entry), parse_mode="Markdown")
+            else:
+                await q.edit_message_text("⚠️ Brief non trovato.")
+        elif azione == "scarta":
+            lm_entry = alm.scarta_brief(lm_id)
+            await q.edit_message_text(f"🗑 Brief `{lm_id}` scartato." if lm_entry else "⚠️ Brief non trovato.",
+                                       parse_mode="Markdown")
+
 
 # ---------------------------------------------------------------------------
 # Job schedulati
@@ -1165,6 +1439,86 @@ async def job_task_reminder(ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.warning(f"Job task reminder: {e}")
 
+async def job_orchestratore(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: orchestratore commerciale")
+    loop = asyncio.get_event_loop()
+    try:
+        proposte = await loop.run_in_executor(executor, aorch.run)
+        for p in proposte:
+            await ctx.bot.send_message(
+                OWNER_ID, aorch.formatta_proposta(p["insight"], p["proposta"]),
+                reply_markup=kb_orchestra(p["prop_id"], p["proposta"]), parse_mode="Markdown"
+            )
+    except Exception as e:
+        log.warning(f"Job orchestratore: {e}")
+
+async def job_prospect_rsgas(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: prospect RS Gas&Power")
+    loop = asyncio.get_event_loop()
+    try:
+        stats = await loop.run_in_executor(executor, apros.run)
+        await ctx.bot.send_message(OWNER_ID, apros.formatta_riepilogo(stats), parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job prospect RS Gas: {e}")
+
+async def job_incentivi_renergy(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: incentivi Renergy (nazionali + Veneto/Trentino-AA/FVG)")
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio, bozza = await loop.run_in_executor(executor, ainc.run)
+        if messaggio:
+            await ctx.bot.send_message(OWNER_ID, messaggio, parse_mode="Markdown")
+        if bozza:
+            await ctx.bot.send_message(
+                OWNER_ID,
+                f"✉️ *Bozza email cliente — incentivo rilevato*\n\n*Oggetto:* {bozza.get('oggetto','')}\n\n"
+                f"─────────────────\n{bozza.get('corpo','')}\n─────────────────",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        log.warning(f"Job incentivi Renergy: {e}")
+
+async def job_crosssell(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: cross-sell")
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio = await loop.run_in_executor(executor, acrs.run)
+        await ctx.bot.send_message(OWNER_ID, messaggio, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job cross-sell: {e}")
+
+async def job_tariffe_rs(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: tariffe competitor RS Gas&Power")
+    loop = asyncio.get_event_loop()
+    try:
+        _, messaggio, _ = await loop.run_in_executor(executor, atar.run)
+        if messaggio:
+            await ctx.bot.send_message(OWNER_ID, messaggio, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job tariffe RS Gas: {e}")
+
+async def job_clienti(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: clienti — upsell & referral")
+    loop = asyncio.get_event_loop()
+    try:
+        _, _, messaggio = await loop.run_in_executor(executor, aclienti.run)
+        await ctx.bot.send_message(OWNER_ID, messaggio, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job clienti: {e}")
+
+async def job_leadmagnet_acm(ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("Job: lead magnet PDF ACM")
+    loop = asyncio.get_event_loop()
+    try:
+        entry, testo = await loop.run_in_executor(executor, alm.genera_brief)
+        if entry:
+            await ctx.bot.send_message(OWNER_ID, testo, reply_markup=kb_leadmagnet_anteprima(entry["id"]), parse_mode="Markdown")
+        elif testo:
+            await ctx.bot.send_message(OWNER_ID, testo, parse_mode="Markdown")
+    except Exception as e:
+        log.warning(f"Job lead magnet ACM: {e}")
+
+
 async def job_newsletter(ctx: ContextTypes.DEFAULT_TYPE):
     log.info("Job: generazione newsletter settimanale")
     loop = asyncio.get_event_loop()
@@ -1231,6 +1585,16 @@ def main():
     app.add_handler(CommandHandler("report",  cmd_report))
     app.add_handler(CommandHandler("rsgas",   cmd_rsgas))
 
+    # AIOS v2.0 — orchestratore commerciale e nuovi agenti
+    app.add_handler(CommandHandler("orchestra",      cmd_orchestra))
+    app.add_handler(CommandHandler("tariffe",        cmd_tariffe))
+    app.add_handler(CommandHandler("incentivi",      cmd_incentivi))
+    app.add_handler(CommandHandler("landing",        cmd_landing))
+    app.add_handler(CommandHandler("leadmagnet",     cmd_leadmagnet))
+    app.add_handler(CommandHandler("crosssell",      cmd_crosssell))
+    app.add_handler(CommandHandler("clienti",        cmd_clienti))
+    app.add_handler(CommandHandler("prospect_rsgas", cmd_prospect_rsgas))
+
     # Newsletter
     app.add_handler(CommandHandler("newsletter", cmd_newsletter))
     app.add_handler(CommandHandler("nl_stats",   cmd_nl_stats))
@@ -1260,6 +1624,22 @@ def main():
     app.job_queue.run_daily(job_competitor,        time=dt_time(9, 0),  days=(4,))
     # Newsletter — venerdì 10:00
     app.job_queue.run_daily(job_newsletter,        time=dt_time(10, 0), days=(4,))
+
+    # --- AIOS v2.0 — orchestratore commerciale e nuovi agenti -----------------
+    # Orchestratore commerciale — ogni giorno 06:30 (prima di tutti gli altri agenti)
+    app.job_queue.run_daily(job_orchestratore,     time=dt_time(6, 30), days=tuple(range(7)))
+    # Prospect RS Gas&Power — lunedì 07:00 (insieme a Renergy/ACM del briefing mattutino)
+    app.job_queue.run_daily(job_prospect_rsgas,    time=dt_time(7, 0),  days=(0,))
+    # Incentivi Renergy — nazionali + Veneto/Trentino-Alto Adige/FVG e province — martedì e venerdì 07:00
+    app.job_queue.run_daily(job_incentivi_renergy, time=dt_time(7, 0),  days=(1, 4))
+    # Cross-sell tra le tre aziende — lunedì 07:15
+    app.job_queue.run_daily(job_crosssell,         time=dt_time(7, 15), days=(0,))
+    # Tariffe competitor RS Gas&Power — lunedì e giovedì 07:45
+    app.job_queue.run_daily(job_tariffe_rs,        time=dt_time(7, 45), days=(0, 3))
+    # Clienti esistenti — upsell & referral — giovedì 09:30
+    app.job_queue.run_daily(job_clienti,           time=dt_time(9, 30), days=(3,))
+    # Lead magnet PDF ACM — venerdì 10:00 (insieme alla newsletter)
+    app.job_queue.run_daily(job_leadmagnet_acm,    time=dt_time(10, 0), days=(4,))
     # Risposte email campagne — ogni giorno 10:30
     async def _job_risposte(ctx: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_event_loop()

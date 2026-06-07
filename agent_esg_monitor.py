@@ -9,6 +9,7 @@ import os, json, logging, feedparser, hashlib
 from datetime import datetime
 from pathlib import Path
 import anthropic
+import shared_intelligence as si
 
 log = logging.getLogger(__name__)
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY")
@@ -158,9 +159,37 @@ def run() -> tuple[dict, str]:
     dati["ultimo_hash"] = h
     salva_dati(dati)
 
+    _pubblica_insight(analisi)
     briefing = formatta_briefing_esg(analisi)
     log.info("=== AGENTE ESG MONITOR — completato ===")
     return analisi, briefing
+
+
+# ---------------------------------------------------------------------------
+# Shared intelligence — pubblica gli impatti normativi rilevanti come insight
+# ---------------------------------------------------------------------------
+def _pubblica_insight(analisi: dict):
+    livello = analisi.get("alert_level", "informativo")
+    urgenza = {"critico": "alta", "importante": "media", "informativo": "bassa"}.get(livello, "media")
+    impatto = "alto" if livello == "critico" else ("medio" if livello == "importante" else "basso")
+    for imp in analisi.get("impatti_acm", [])[:2]:
+        try:
+            si.aggiungi_insight("agent_esg_monitor", {
+                "azienda":             "ACM",
+                "tipo":                "normativa",
+                "titolo":              f"{imp.get('area','ESG')}: {imp.get('descrizione','')[:90]}",
+                "sintesi":             (analisi.get("sintesi", "") or "")[:200],
+                "dettaglio":           imp.get("descrizione", ""),
+                "urgenza":             {"immediata": "alta", "entro_3_mesi": "media", "entro_anno": "bassa"}
+                                       .get(imp.get("urgenza", ""), urgenza),
+                "impatto_commerciale": impatto,
+                "servizi_collegati":   [imp.get("opportunita_servizio", "")],
+                "target_icp":          imp.get("clienti_impattati", ""),
+                "finestra_temporale":  imp.get("urgenza", ""),
+                "azioni_suggerite":    ["campagna_email", "newsletter", "landing_page"],
+            })
+        except Exception as e:
+            log.warning(f"Pubblicazione insight ESG fallita: {e}")
 
 
 # ---------------------------------------------------------------------------

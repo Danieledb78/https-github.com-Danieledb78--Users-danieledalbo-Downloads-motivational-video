@@ -6,3 +6,5 @@ __pycache__/
 *.zip
 *.json
 !requirements.txt
+!package.json
+pdf_storage/

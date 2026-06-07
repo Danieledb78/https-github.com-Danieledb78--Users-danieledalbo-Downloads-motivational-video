@@ -145,6 +145,80 @@ def aggiorna_kpi_rsgas(dati: dict):
 
 
 # ---------------------------------------------------------------------------
+# Metriche di conversione AIOS v2.0 — fonte, ROI, landing, PDF, cross-sell
+# ---------------------------------------------------------------------------
+FONTI_LEAD = ("apollo_automatico", "crosssell", "inbound_landing", "referral", "newsletter")
+
+def _leggi_json(path: str, default):
+    try:
+        if Path(path).exists():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        log.warning(f"Lettura {path}: {e}")
+    return default
+
+def calcola_kpi_conversione(leads: list[dict]) -> dict:
+    # Lead per fonte + tasso conversione (lead -> cliente) per fonte
+    per_fonte = {f: {"lead": 0, "clienti": 0} for f in FONTI_LEAD}
+    for l in leads:
+        fonte = l.get("fonte", "")
+        chiave = next((f for f in FONTI_LEAD if f in fonte), None)
+        if not chiave:
+            continue
+        per_fonte[chiave]["lead"] += 1
+        if l.get("stato") in ("cliente", "chiuso_vinto", "installato", "attivo"):
+            per_fonte[chiave]["clienti"] += 1
+    conversione_fonte = {
+        f: {"lead": d["lead"], "clienti": d["clienti"],
+            "tasso_pct": round(d["clienti"] / d["lead"] * 100, 1) if d["lead"] else 0.0}
+        for f, d in per_fonte.items()
+    }
+
+    # ROI campagne email — lead generati / email inviate
+    campagne = _leggi_json("campaigns.json", {})
+    tot_email = sum(c.get("stats", {}).get("inviati", 0) for c in campagne.values())
+    tot_lead_camp = sum(len(c.get("lead", [])) for c in campagne.values())
+    roi_campagne = round(tot_lead_camp / tot_email, 3) if tot_email else 0.0
+
+    # Landing page — visite, form, conversione
+    landing = _leggi_json("landing_pages.json", [])
+    landing_kpi = []
+    for l in landing:
+        m = l.get("metriche", {})
+        visite, form = m.get("visite", 0), m.get("form_compilati", 0)
+        landing_kpi.append({
+            "id": l.get("id", ""), "azienda": l.get("azienda", ""), "stato": l.get("stato", ""),
+            "visite": visite, "form_compilati": form,
+            "tasso_conv_pct": round(form / visite * 100, 1) if visite else 0.0,
+        })
+
+    # PDF lead magnet ACM — download, lead da teaser
+    leadmagnet = _leggi_json("leadmagnet_acm.json", [])
+    pdf_kpi = {
+        "brief_pubblicati": sum(1 for e in leadmagnet if e.get("stato") == "approvato"),
+        "download_totali":  sum(e.get("metriche", {}).get("download", 0) for e in leadmagnet),
+        "lead_da_teaser":   sum(e.get("metriche", {}).get("lead_da_teaser", 0) for e in leadmagnet),
+    }
+
+    # Cross-sell — opportunità identificate, accettate, convertite
+    crosssell = _leggi_json("crosssell_log.json", [])
+    crosssell_kpi = {
+        "identificate": len(crosssell),
+        "accettate":    sum(1 for e in crosssell if e.get("esito") == "accettato"),
+        "convertite":   sum(1 for e in crosssell if e.get("esito") == "convertito"),
+    }
+
+    return {
+        "per_fonte":  conversione_fonte,
+        "roi_campagne_email": roi_campagne,
+        "landing":    landing_kpi,
+        "leadmagnet_acm": pdf_kpi,
+        "crosssell":  crosssell_kpi,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Claude — sintesi esecutiva
 # ---------------------------------------------------------------------------
 PROMPT_SINTESI = """Sei l'analista di un imprenditore italiano con 3 aziende.
@@ -184,6 +258,7 @@ def run() -> dict:
         "campagne": calcola_kpi_campagne(),
         "tasks":    calcola_kpi_tasks(),
         "rsgas":    get_kpi_rsgas(),
+        "conversione": calcola_kpi_conversione(leads),
     }
     report["sintesi"] = genera_sintesi(report)
 
@@ -237,6 +312,35 @@ def formatta_report(report: dict) -> str:
         righe.append("\n✅ *Task Tracker*")
         scaduti_txt = f" | 🔴 Scaduti: {tasks.get('scaduti',0)}" if tasks.get('scaduti') else ""
         righe.append(f"  Aperti: {tasks.get('aperti',0)} | Completati: {tasks.get('completati',0)}{scaduti_txt}")
+
+    # Metriche di conversione (AIOS v2.0)
+    conv = report.get("conversione", {})
+    if conv:
+        righe.append("\n📈 *Conversione & ROI*")
+        per_fonte = {f: d for f, d in conv.get("per_fonte", {}).items() if d.get("lead", 0) > 0}
+        if per_fonte:
+            righe.append("  Lead → cliente per fonte:")
+            for fonte, d in per_fonte.items():
+                righe.append(f"    • {fonte}: {d['lead']} lead → {d['clienti']} clienti ({d['tasso_pct']}%)")
+        righe.append(f"  ROI campagne email: {conv.get('roi_campagne_email',0)} lead/email inviata")
+
+        landing = conv.get("landing", [])
+        attive = [l for l in landing if l.get("stato") == "pubblicata"]
+        if attive:
+            righe.append(f"  Landing attive: {len(attive)}")
+            for l in attive[:3]:
+                righe.append(f"    • {l['id']} ({l['azienda']}): {l['visite']} visite, "
+                             f"{l['form_compilati']} form ({l['tasso_conv_pct']}%)")
+
+        lm = conv.get("leadmagnet_acm", {})
+        if lm.get("brief_pubblicati"):
+            righe.append(f"  PDF lead magnet ACM: {lm['brief_pubblicati']} pubblicati | "
+                         f"{lm['download_totali']} download | {lm['lead_da_teaser']} lead da teaser")
+
+        cs = conv.get("crosssell", {})
+        if cs.get("identificate"):
+            righe.append(f"  Cross-sell: {cs['identificate']} identificate | "
+                         f"{cs['accettate']} accettate | {cs['convertite']} convertite")
 
     # Sintesi
     if report.get("sintesi"):

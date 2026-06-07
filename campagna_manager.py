@@ -50,7 +50,8 @@ def get_tutte_campagne() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Creazione campagna
 # ---------------------------------------------------------------------------
-def nuova_campagna(azienda: str, from_account_idx: int, target: str, offerta: str) -> dict:
+def nuova_campagna(azienda: str, from_account_idx: int, target: str, offerta: str,
+                   scadenza_normativa: str | None = None) -> dict:
     camp_id = f"camp_{uuid.uuid4().hex[:8]}"
     campagna = {
         "id":               camp_id,
@@ -58,6 +59,7 @@ def nuova_campagna(azienda: str, from_account_idx: int, target: str, offerta: st
         "from_account_idx": from_account_idx,
         "target_testo":     target,
         "offerta":          offerta,
+        "scadenza_normativa": scadenza_normativa,  # es. "2026-01-01" — countdown urgenza (es. scadenza CSRD per ACM)
         "stato":            "bozza",          # bozza → attiva → pausata → completata
         "email_sequence":   [],               # [{"tipo","oggetto","corpo","approvata"}]
         "lead":             [],
@@ -134,6 +136,119 @@ def tutte_approvate(camp_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Segmentazione ACM&Partners — sequenze dedicate per area di interesse
+# (ESG/CSRD, M&A/crescita, China Desk, Australia Desk, generico)
+# ---------------------------------------------------------------------------
+SEGMENTI_ACM = {
+    "ESG/CSRD":       "normativa ESG/CSRD, rendicontazione di sostenibilità, compliance ambientale",
+    "M&A/crescita":   "operazioni di M&A, fusioni e acquisizioni, strategie di crescita e scaling",
+    "China Desk":     "espansione e operatività in Cina, partnership e supply chain asiatica",
+    "Australia Desk": "espansione e operatività in Australia e mercati APAC",
+    "generico":       "consulenza manageriale generale per PMI in crescita",
+}
+
+PAROLE_CHIAVE_SEGMENTO_ACM = {
+    "ESG/CSRD":       ("esg", "csrd", "sostenibilit", "ambiente", "bilancio sociale", "rendicontazione"),
+    "M&A/crescita":   ("m&a", "fusione", "acquisizione", "merger", "crescita", "scaling", "exit"),
+    "China Desk":     ("cina", "china", "asia", "shanghai", "pechino", "beijing"),
+    "Australia Desk": ("australia", "sydney", "melbourne", "apac", "oceania"),
+}
+
+def assegna_segmento_acm(lead: dict) -> str:
+    """Classifica euristicamente un lead ACM in un segmento tematico in base a
+    settore/azienda/note (parole chiave). Fallback a 'generico' se nessun match."""
+    testo = " ".join(str(lead.get(c, "")) for c in ("settore", "azienda", "note", "messaggio")).lower()
+    for segmento, parole in PAROLE_CHIAVE_SEGMENTO_ACM.items():
+        if any(p in testo for p in parole):
+            return segmento
+    return "generico"
+
+
+def giorni_a_scadenza(scadenza_iso: str) -> int | None:
+    """Giorni mancanti a una scadenza normativa (es. CSRD), per il countdown urgenza nelle email."""
+    try:
+        return (datetime.fromisoformat(scadenza_iso[:10]).date() - datetime.now().date()).days
+    except (ValueError, TypeError):
+        return None
+
+
+PROMPT_SEQUENZA_SEGMENTATA = """Sei un copywriter esperto di email marketing B2B in italiano.
+Crea una sequenza di 3 email di cold outreach per questa campagna ACM&Partners,
+mirata SPECIFICAMENTE al segmento "{segmento}" (focus: {focus}).
+
+Target generale campagna: {target}
+Offerta / Obiettivo: {offerta}
+{scadenza_txt}
+
+Regole:
+- Email 1 (cold_email): primo contatto, aggancio sul tema specifico del segmento, tono curioso e diretto
+- Email 2 (followup_1): follow-up dopo 3-4 giorni, dato di settore o caso studio sul tema del segmento
+- Email 3 (followup_2): ultimo contatto dopo 8-10 giorni, FOMO + facilità d'azione{urgenza_nota}
+
+Stile: italiano professionale ma non formale, max 130 parole corpo.
+Usa {{{{nome_referente}}}} e {{{{nome_azienda}}}} come variabili per personalizzazione.
+In fondo ad ogni email aggiungi: "Per non ricevere altre comunicazioni: rispondi STOP."
+
+Rispondi SOLO con JSON valido, nient'altro:
+[
+  {{"tipo": "cold_email",  "oggetto": "...", "corpo": "..."}},
+  {{"tipo": "followup_1",  "oggetto": "...", "corpo": "..."}},
+  {{"tipo": "followup_2",  "oggetto": "...", "corpo": "..."}}
+]"""
+
+def genera_sequenze_segmentate_acm(camp_id: str, segmenti: list[str] | None = None) -> dict:
+    """Genera (o rigenera) sequenze email dedicate per ciascun segmento ACM presente
+    tra i lead della campagna. Salvate in camp['sequenze_segmentate'][segmento],
+    parallele alla 'email_sequence' di default (usata come fallback)."""
+    campagne = carica_campagne()
+    camp = campagne[camp_id]
+    if "ACM" not in camp.get("azienda", ""):
+        raise ValueError("Segmentazione disponibile solo per campagne ACM&Partners")
+
+    segmenti = segmenti or sorted({l.get("segmento", "generico") for l in camp.get("lead", [])}) or ["generico"]
+    scadenza = camp.get("scadenza_normativa")
+    giorni   = giorni_a_scadenza(scadenza) if scadenza else None
+    scadenza_txt = f"Scadenza normativa di riferimento: {scadenza} (mancano {giorni} giorni)." if giorni is not None else ""
+    urgenza_nota = (" — richiama la scadenza ormai vicina per creare urgenza, senza allarmismo"
+                    if giorni is not None and giorni <= 120 else "")
+
+    sequenze = camp.setdefault("sequenze_segmentate", {})
+    for segmento in segmenti:
+        focus = SEGMENTI_ACM.get(segmento, SEGMENTI_ACM["generico"])
+        msg = claude.messages.create(
+            model="claude-opus-4-8", max_tokens=3000,
+            messages=[{"role": "user", "content": PROMPT_SEQUENZA_SEGMENTATA.format(
+                segmento=segmento, focus=focus, target=camp["target_testo"], offerta=camp["offerta"],
+                scadenza_txt=scadenza_txt, urgenza_nota=urgenza_nota,
+            )}],
+        )
+        t = msg.content[0].text.strip()
+        seq = json.loads(t[t.find("["):t.rfind("]")+1])
+        for email in seq:
+            email["approvata"] = False
+        sequenze[segmento] = seq
+
+    salva_campagne(campagne)
+    return sequenze
+
+def approva_email_segmento(camp_id: str, segmento: str, tipo: str, oggetto: str = None, corpo: str = None):
+    """Segna come approvata un'email di una sequenza segmentata ACM, con eventuale modifica."""
+    campagne = carica_campagne()
+    camp = campagne[camp_id]
+    for email in camp.get("sequenze_segmentate", {}).get(segmento, []):
+        if email["tipo"] == tipo:
+            email["approvata"] = True
+            if oggetto: email["oggetto"] = oggetto
+            if corpo:   email["corpo"]   = corpo
+    salva_campagne(campagne)
+
+def tutte_approvate_segmento(camp_id: str, segmento: str) -> bool:
+    camp = get_campagna(camp_id)
+    seq = camp.get("sequenze_segmentate", {}).get(segmento, []) if camp else []
+    return bool(seq) and all(e.get("approvata") for e in seq)
+
+
+# ---------------------------------------------------------------------------
 # Apollo — ricerca lead per campagna
 # ---------------------------------------------------------------------------
 PROMPT_FILTRI_APOLLO = """Traduci questo target di campagna in filtri Apollo.io per l'Italia.
@@ -176,12 +291,13 @@ def aggiungi_lead_campagna(camp_id: str, lead_list: list[dict]):
     camp = campagne[camp_id]
     aggiunti = 0
     email_esistenti = {l["email"] for l in camp["lead"] if l.get("email")}
+    is_acm = "ACM" in camp.get("azienda", "")
 
     for az in lead_list:
         email = az.get("primary_email") or az.get("email", "")
         if not email or email in email_esistenti:
             continue
-        camp["lead"].append({
+        nuovo_lead = {
             "id":           uuid.uuid4().hex[:8],
             "azienda":      az.get("name", ""),
             "email":        email,
@@ -192,7 +308,10 @@ def aggiungi_lead_campagna(camp_id: str, lead_list: list[dict]):
             "data_email1":  None,
             "data_email2":  None,
             "data_email3":  None,
-        })
+        }
+        if is_acm:
+            nuovo_lead["segmento"] = assegna_segmento_acm(nuovo_lead)
+        camp["lead"].append(nuovo_lead)
         email_esistenti.add(email)
         aggiunti += 1
 
@@ -225,6 +344,33 @@ def get_lead_da_processare(camp_id: str) -> dict:
             giorni = (oggi - datetime.fromisoformat(lead["data_email2"]).date()).days
             if giorni >= 5:
                 result["followup_2"].append(lead)
+    return result
+
+def get_lead_da_processare_segmentato(camp_id: str) -> dict:
+    """Come get_lead_da_processare ma raggruppato per segmento ACM. I lead il cui
+    segmento non ha una sequenza dedicata ricadono su 'generico' (o sul proprio
+    segmento se nessun 'generico' esiste, per non perdere l'invio)."""
+    camp = get_campagna(camp_id)
+    if not camp:
+        return {}
+    oggi = datetime.now().date()
+    sequenze_disponibili = camp.get("sequenze_segmentate", {})
+    result: dict[str, dict[str, list]] = {}
+
+    for lead in camp.get("lead", []):
+        segmento = lead.get("segmento") or "generico"
+        if segmento not in sequenze_disponibili and "generico" in sequenze_disponibili:
+            segmento = "generico"
+        bucket = result.setdefault(segmento, {"cold_email": [], "followup_1": [], "followup_2": []})
+        stato = lead.get("stato")
+        if stato == "da_inviare":
+            bucket["cold_email"].append(lead)
+        elif stato == "email1_inviata" and lead.get("data_email1"):
+            if (oggi - datetime.fromisoformat(lead["data_email1"]).date()).days >= 3:
+                bucket["followup_1"].append(lead)
+        elif stato == "email2_inviata" and lead.get("data_email2"):
+            if (oggi - datetime.fromisoformat(lead["data_email2"]).date()).days >= 5:
+                bucket["followup_2"].append(lead)
     return result
 
 def segna_inviata(camp_id: str, lead_id: str, tipo: str):

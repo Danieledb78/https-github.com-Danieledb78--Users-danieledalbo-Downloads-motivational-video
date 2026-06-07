@@ -292,40 +292,57 @@ async def cerca_e_mostra_lead(update: Update, chat_id: int):
 # ---------------------------------------------------------------------------
 # Invio sequenze (chiamato dal job giornaliero e da /run_all)
 # ---------------------------------------------------------------------------
+async def _invia_lead_sequenza(camp_id: str, da_fare: dict, seq_map: dict, account, segmento: str | None = None) -> int:
+    """Invia le email dovute per uno step di sequenza (usata per il flusso classico
+    e, per le campagne ACM segmentate, una volta per ciascun segmento)."""
+    from bot import invia_email
+    inviate = 0
+    for tipo, lead_list in da_fare.items():
+        email_tmpl = seq_map.get(tipo)
+        if not email_tmpl:
+            continue
+        for lead in lead_list:
+            if not lead.get("email"):
+                continue
+            try:
+                corpo = email_tmpl["corpo"].replace(
+                    "{nome_referente}", lead.get("referente") or "Gentile"
+                ).replace(
+                    "{nome_azienda}", lead.get("azienda", "")
+                )
+                invia_email(account, lead["email"], email_tmpl["oggetto"], corpo)
+                cm.segna_inviata(camp_id, lead["id"], tipo)
+                inviate += 1
+                await asyncio.sleep(2)   # pausa anti-spam
+            except Exception as e:
+                tag = f" [segmento {segmento}]" if segmento else ""
+                log.error(f"Errore invio {lead['email']}{tag}: {e}")
+    return inviate
+
+
 async def esegui_sequenze(ctx_or_bot, chat_id: int):
-    """Processa tutti i follow-up schedulati per le campagne attive."""
-    from bot import invia_email, EMAIL_ACCOUNTS
+    """Processa tutti i follow-up schedulati per le campagne attive.
+    Le campagne ACM con sequenze segmentate (vedi campagna_manager.SEGMENTI_ACM)
+    instradano ogni lead sulla sequenza del proprio segmento tematico."""
+    from bot import EMAIL_ACCOUNTS
     campagne = cm.get_campagne_attive()
     totale_inviate = 0
 
     for camp in campagne:
-        camp_id  = camp["id"]
-        seq_map  = {e["tipo"]: e for e in camp.get("email_sequence", []) if e.get("approvata")}
-        account  = EMAIL_ACCOUNTS[camp.get("from_account_idx", 0)] if EMAIL_ACCOUNTS else None
+        camp_id = camp["id"]
+        account = EMAIL_ACCOUNTS[camp.get("from_account_idx", 0)] if EMAIL_ACCOUNTS else None
         if not account:
             continue
 
-        da_fare = cm.get_lead_da_processare(camp_id)
-
-        for tipo, lead_list in da_fare.items():
-            email_tmpl = seq_map.get(tipo)
-            if not email_tmpl:
-                continue
-            for lead in lead_list:
-                if not lead.get("email"):
-                    continue
-                try:
-                    corpo = email_tmpl["corpo"].replace(
-                        "{nome_referente}", lead.get("referente") or "Gentile"
-                    ).replace(
-                        "{nome_azienda}", lead.get("azienda", "")
-                    )
-                    invia_email(account, lead["email"], email_tmpl["oggetto"], corpo)
-                    cm.segna_inviata(camp_id, lead["id"], tipo)
-                    totale_inviate += 1
-                    await asyncio.sleep(2)   # pausa anti-spam
-                except Exception as e:
-                    log.error(f"Errore invio {lead['email']}: {e}")
+        sequenze_segmentate = camp.get("sequenze_segmentate")
+        if sequenze_segmentate:
+            for segmento, da_fare in cm.get_lead_da_processare_segmentato(camp_id).items():
+                seq_map = {e["tipo"]: e for e in sequenze_segmentate.get(segmento, []) if e.get("approvata")}
+                totale_inviate += await _invia_lead_sequenza(camp_id, da_fare, seq_map, account, segmento)
+        else:
+            seq_map = {e["tipo"]: e for e in camp.get("email_sequence", []) if e.get("approvata")}
+            da_fare = cm.get_lead_da_processare(camp_id)
+            totale_inviate += await _invia_lead_sequenza(camp_id, da_fare, seq_map, account)
 
     return totale_inviate
 
