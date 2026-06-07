@@ -54,6 +54,10 @@ Secrets Replit:
   EMAIL_1_IMAP_HOST      EMAIL_1_IMAP_PORT    (opzionale per IMAP)
   EMAIL_2_LABEL ...  (aggiungi quanti account vuoi)
   NEWSLETTER_RENERGY_EMAIL  NEWSLETTER_ACM_EMAIL  (opzionale)
+  FTP_HOST_RENERGY   FTP_USER_RENERGY   FTP_PASSWORD_RENERGY   FTP_DIR_RENERGY
+  FTP_HOST_RSGAS     FTP_USER_RSGAS     FTP_PASSWORD_RSGAS     FTP_DIR_RSGAS
+  FTP_HOST_ACM       FTP_USER_ACM       FTP_PASSWORD_ACM       FTP_DIR_ACM
+  LANDING_URL_BASE_RENERGY  LANDING_URL_BASE_RSGAS  LANDING_URL_BASE_ACM  (opzionale, default sottodomini ufficiali)
 """
 
 import os, sys, json, smtplib, tempfile, logging, asyncio
@@ -371,7 +375,7 @@ def kb_orchestra(prop_id: str, proposta: dict) -> InlineKeyboardMarkup:
 
 def kb_landing_anteprima(land_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🚀 Deploy su Netlify", callback_data=f"land_deploy_{land_id}"),
+        InlineKeyboardButton("🚀 Pubblica online", callback_data=f"land_deploy_{land_id}"),
     ]])
 
 def kb_leadmagnet_anteprima(lm_id: str) -> InlineKeyboardMarkup:
@@ -919,7 +923,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/rsgas — aggiorna KPI RS Gas\\&Power\n\n"
         "🧠 *AIOS — Cervello commerciale:*\n"
         "/orchestra — proposte commerciali dagli insight\n"
-        "/landing — genera landing page \\+ deploy Netlify\n"
+        "/landing — genera landing page \\+ pubblicazione sul sottodominio\n"
         "/leadmagnet — brief PDF ESG per ACM \\(lead magnet\\)\n"
         "/crosssell — opportunità cross\\-sell tra le aziende\n"
         "/clienti — upsell \\& referral su clienti esistenti\n\n"
@@ -1339,11 +1343,11 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 except Exception: pass
             await q.edit_message_text("📞 Segnato come contatto diretto da gestire personalmente.")
 
-    # Landing page — deploy su Netlify
+    # Landing page — pubblicazione via FTPS sul sottodominio dedicato
     elif data.startswith("land_"):
         azione, _, land_id = data[len("land_"):].partition("_")
         if azione == "deploy":
-            await q.edit_message_text("🚀 Pubblico la landing su Netlify...")
+            await q.edit_message_text("🚀 Pubblico la landing online...")
             loop = asyncio.get_event_loop()
             try:
                 esito      = await loop.run_in_executor(executor, alanding.pubblica_landing, land_id)

@@ -24,7 +24,7 @@ NPS_REFERRAL_THRESHOLD = 7    # NPS minimo per attivare email referral
 # ---------------------------------------------------------------------------
 # Deploy / API
 # ---------------------------------------------------------------------------
-LANDING_VERIFY_DELAY_SEC = 30   # secondi di attesa prima di verificare il deploy Netlify
+LANDING_VERIFY_DELAY_SEC = 30   # secondi di attesa prima di verificare il deploy FTPS
 API_RETRY_MAX            = 2    # numero massimo di retry su errori 529/overload
 API_TIMEOUT_SEC          = 60   # timeout (secondi) per le chiamate a Claude API
 

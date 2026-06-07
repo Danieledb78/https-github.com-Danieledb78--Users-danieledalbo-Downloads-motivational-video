@@ -1,13 +1,15 @@
 """
 agent_landing.py — Generatore Landing Page Automatico (AIOS v2.0)
 Genera con Claude Opus una landing page HTML/CSS/JS completa, brandizzata per azienda,
-e la pubblica automaticamente su Netlify dopo approvazione dell'owner.
+e la pubblica automaticamente via FTPS sul sottodominio dedicato di ciascuna azienda
+(landing.renergygroup.it | landing.rsgaspower.it | landing.acmpartners.it), dopo
+approvazione dell'owner.
 
 Trigger: chiamato dall'orchestratore su approvazione owner, oppure manualmente con /landing
-Output: file HTML in /tmp + deploy Netlify + URL salvato in shared_intelligence.json
+Output: file HTML in /tmp + deploy FTPS + URL salvato in shared_intelligence.json
 """
 
-import os, io, json, time, zipfile, logging, re
+import os, json, time, logging, re, ftplib
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -21,11 +23,31 @@ CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY")
 claude     = anthropic.Anthropic(api_key=CLAUDE_KEY)
 LANDING_FILE = "landing_pages.json"
 
-NETLIFY_TOKEN = os.environ.get("NETLIFY_ACCESS_TOKEN")
-NETLIFY_SITES = {
-    "Renergy": os.environ.get("NETLIFY_SITE_ID_RENERGY"),
-    "RS_Gas":  os.environ.get("NETLIFY_SITE_ID_RSGAS"),
-    "ACM":     os.environ.get("NETLIFY_SITE_ID_ACM"),
+# Deploy via FTPS sul sottodominio "landing" del dominio di ciascuna azienda.
+# Ogni landing viene caricata in una sottocartella <slug>/index.html, raggiungibile
+# all'URL pubblico <url_base>/<slug>/
+FTP_DEPLOY = {
+    "Renergy": {
+        "host":     os.environ.get("FTP_HOST_RENERGY"),
+        "user":     os.environ.get("FTP_USER_RENERGY"),
+        "password": os.environ.get("FTP_PASSWORD_RENERGY"),
+        "dir":      os.environ.get("FTP_DIR_RENERGY", "/"),
+        "url_base": os.environ.get("LANDING_URL_BASE_RENERGY", "https://landing.renergygroup.it"),
+    },
+    "RS_Gas": {
+        "host":     os.environ.get("FTP_HOST_RSGAS"),
+        "user":     os.environ.get("FTP_USER_RSGAS"),
+        "password": os.environ.get("FTP_PASSWORD_RSGAS"),
+        "dir":      os.environ.get("FTP_DIR_RSGAS", "/"),
+        "url_base": os.environ.get("LANDING_URL_BASE_RSGAS", "https://landing.rsgaspower.it"),
+    },
+    "ACM": {
+        "host":     os.environ.get("FTP_HOST_ACM"),
+        "user":     os.environ.get("FTP_USER_ACM"),
+        "password": os.environ.get("FTP_PASSWORD_ACM"),
+        "dir":      os.environ.get("FTP_DIR_ACM", "/"),
+        "url_base": os.environ.get("LANDING_URL_BASE_ACM", "https://landing.acmpartners.it"),
+    },
 }
 AZIENDE_NOME = {"Renergy": "Renergy Project&Build", "RS_Gas": "RS Gas&Power", "ACM": "ACM&Partners"}
 
@@ -92,8 +114,7 @@ def _slug(testo: str) -> str:
     return s[:50] or "landing"
 
 
-def salva_html(azienda: str, titolo_insight: str, html: str) -> str:
-    slug = _slug(f"{azienda}-{titolo_insight}")
+def salva_html(slug: str, html: str) -> str:
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = f"/tmp/landing_{slug}_{ts}.html"
     with open(path, "w", encoding="utf-8") as f:
@@ -103,32 +124,41 @@ def salva_html(azienda: str, titolo_insight: str, html: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Deploy automatico su Netlify
+# Deploy automatico via FTPS sul sottodominio "landing" del dominio aziendale
 # ---------------------------------------------------------------------------
-def deploy_netlify(html_path: str, azienda: str) -> dict:
-    """Zippa l'HTML come index.html e lo invia a Netlify per il deploy."""
-    site_id = NETLIFY_SITES.get(azienda)
-    if not NETLIFY_TOKEN or not site_id:
-        return {"ok": False, "errore": "Netlify non configurato (token o site_id mancante)"}
+def _ftp_mkdir_ricorsivo(ftp: ftplib.FTP, percorso: str):
+    """Crea ogni livello mancante della cartella remota (mkdir -p), ignorando
+    l'errore se il livello esiste già."""
+    corrente = ""
+    for livello in (l for l in percorso.split("/") if l):
+        corrente += f"/{livello}"
+        try:
+            ftp.mkd(corrente)
+        except ftplib.error_perm:
+            pass
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(html_path, arcname="index.html")
-    buf.seek(0)
 
+def deploy_ftp(html_path: str, azienda: str, slug: str) -> dict:
+    """Carica l'HTML come index.html in <dir>/<slug>/ via FTPS sul sottodominio
+    'landing' dell'azienda e ritorna l'URL pubblico risultante."""
+    cfg = FTP_DEPLOY.get(azienda, {})
+    if not cfg.get("host") or not cfg.get("user") or not cfg.get("password"):
+        return {"ok": False, "errore": f"FTP non configurato per {azienda} (host/user/password mancanti)"}
+
+    cartella_remota = f"{cfg['dir'].rstrip('/')}/{slug}"
     try:
-        resp = requests.post(
-            f"https://api.netlify.com/api/v1/sites/{site_id}/deploys",
-            headers={"Authorization": f"Bearer {NETLIFY_TOKEN}",
-                     "Content-Type": "application/zip"},
-            data=buf.read(), timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        url = data.get("ssl_url") or data.get("url") or data.get("deploy_ssl_url", "")
-        return {"ok": True, "url": url, "deploy_id": data.get("id", "")}
+        ftp = ftplib.FTP_TLS(cfg["host"], timeout=30)
+        ftp.login(cfg["user"], cfg["password"])
+        ftp.prot_p()
+        _ftp_mkdir_ricorsivo(ftp, cartella_remota)
+        ftp.cwd(cartella_remota)
+        with open(html_path, "rb") as f:
+            ftp.storbinary("STOR index.html", f)
+        ftp.quit()
+        url = f"{cfg['url_base'].rstrip('/')}/{slug}/"
+        return {"ok": True, "url": url}
     except Exception as e:
-        log.warning(f"Netlify — deploy fallito: {e}")
+        log.warning(f"FTP — deploy fallito ({azienda}): {e}")
         return {"ok": False, "errore": str(e)}
 
 
@@ -155,13 +185,14 @@ def carica_registro() -> list[dict]:
     return []
 
 def registra_landing(azienda: str, insight_id: str, titolo: str, html_path: str,
-                      url: str | None = None) -> dict:
+                      slug: str, url: str | None = None) -> dict:
     registro = carica_registro()
     entry = {
         "id":         f"land_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         "azienda":    azienda,
         "insight_id": insight_id,
         "titolo":     titolo,
+        "slug":       slug,
         "html_path":  html_path,
         "url":        url,
         "stato":      "pubblicata" if url else "bozza",
@@ -197,18 +228,21 @@ def crea_bozza_landing(insight: dict) -> dict:
     azienda = insight.get("azienda", "Renergy")
     if azienda == "Tutte":
         azienda = "Renergy"
-    html      = genera_html_landing(azienda, insight.get("titolo", ""), insight.get("target_icp", ""))
-    html_path = salva_html(azienda, insight.get("titolo", ""), html)
-    entry     = registra_landing(azienda, insight.get("id", ""), insight.get("titolo", ""), html_path)
+    titolo    = insight.get("titolo", "")
+    slug      = _slug(f"{azienda}-{titolo}")
+    html      = genera_html_landing(azienda, titolo, insight.get("target_icp", ""))
+    html_path = salva_html(slug, html)
+    entry     = registra_landing(azienda, insight.get("id", ""), titolo, html_path, slug)
     return entry
 
 def pubblica_landing(land_id: str) -> dict:
-    """Esegue il deploy Netlify per una landing già generata e ne verifica l'esito."""
+    """Esegue il deploy via FTPS sul sottodominio dedicato per una landing già
+    generata e ne verifica l'esito."""
     entry = get_landing(land_id)
     if not entry:
         return {"ok": False, "errore": "Landing non trovata"}
 
-    esito = deploy_netlify(entry["html_path"], entry["azienda"])
+    esito = deploy_ftp(entry["html_path"], entry["azienda"], entry.get("slug") or _slug(entry.get("titolo", land_id)))
     if not esito.get("ok"):
         return esito
 
@@ -232,8 +266,9 @@ def formatta_anteprima(entry: dict) -> str:
         f"🖥 *Landing Page generata — {AZIENDE_NOME.get(entry['azienda'], entry['azienda'])}*\n"
         f"ID: `{entry['id']}`\n"
         f"Titolo: {entry.get('titolo','')}\n"
-        f"File: `{entry.get('html_path','')}`\n\n"
-        f"Premi *Deploy* per pubblicare su Netlify, oppure scarica il file per revisionarlo prima."
+        f"File: `{entry.get('html_path','')}`\n"
+        f"URL previsto: `{FTP_DEPLOY.get(entry['azienda'],{}).get('url_base','')}/{entry.get('slug','')}/`\n\n"
+        f"Premi *Deploy* per pubblicarla sul sottodominio dedicato, oppure scarica il file per revisionarlo prima."
     )
 
 def formatta_esito_deploy(esito: dict, entry: dict) -> str:
