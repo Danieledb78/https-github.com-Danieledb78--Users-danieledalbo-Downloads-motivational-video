@@ -400,6 +400,93 @@ def formatta_email(draft: dict, azione: dict, account: dict, idx: int, totale: i
             f"*Oggetto:* {draft.get('oggetto','')}\n\n"
             f"─────────────────\n{draft.get('corpo','')}\n─────────────────")
 
+# ---------------------------------------------------------------------------
+# Proposta C — formato card standardizzato per tutti gli agenti
+# ---------------------------------------------------------------------------
+def formatta_card(titolo: str, societa: str, campi: list, footer: str = "") -> str:
+    """Genera un messaggio formattato coerente per tutti gli output degli agenti."""
+    emoji_soc = {"Renergy": "☀️", "RS Gas": "⚡", "RS_Gas": "⚡", "ACM": "🌿"}.get(societa, "🏢")
+    lines = [f"{emoji_soc} *{titolo}*  —  _{societa}_", ""]
+    for k, v in campi:
+        lines.append(f"• *{k}:* {v}")
+    if footer:
+        lines += ["", f"_{footer}_"]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Proposta A — menu gerarchico a bottoni inline
+# ---------------------------------------------------------------------------
+def kb_menu_principale() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Lead Gen",     callback_data="menu_lead"),
+         InlineKeyboardButton("📣 Campagne",     callback_data="menu_campagne")],
+        [InlineKeyboardButton("🧠 Intelligence", callback_data="menu_intel"),
+         InlineKeyboardButton("📄 Report",       callback_data="menu_report")],
+        [InlineKeyboardButton("⚙️ AIOS",         callback_data="menu_aios"),
+         InlineKeyboardButton("🔧 Sistema",      callback_data="menu_sistema")],
+    ])
+
+def kb_menu_lead() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("▶ Avvia tutti",       callback_data="menu_do_run_all"),
+         InlineKeyboardButton("☀️ Solo Renergy",     callback_data="menu_do_renergy")],
+        [InlineKeyboardButton("🌿 Solo ACM",         callback_data="menu_do_acm"),
+         InlineKeyboardButton("📋 Ultimi lead",      callback_data="menu_do_lead")],
+        [InlineKeyboardButton("🔍 Prospect RS Gas",  callback_data="menu_do_prospect_rsgas")],
+        [InlineKeyboardButton("◀ Menu principale",  callback_data="menu_home")],
+    ])
+
+def kb_menu_campagne() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("+ Nuova campagna",   callback_data="menu_do_nuova_campagna"),
+         InlineKeyboardButton("📋 Campagne",         callback_data="menu_do_campagne")],
+        [InlineKeyboardButton("📬 Newsletter",       callback_data="menu_do_newsletter"),
+         InlineKeyboardButton("📊 NL Stats",         callback_data="menu_do_nl_stats")],
+        [InlineKeyboardButton("📧 Risposte email",   callback_data="menu_do_risposte")],
+        [InlineKeyboardButton("◀ Menu principale",  callback_data="menu_home")],
+    ])
+
+def kb_menu_intel() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🕵️ Competitor",     callback_data="menu_do_competitor"),
+         InlineKeyboardButton("🌿 ESG/CSRD",        callback_data="menu_do_esg")],
+        [InlineKeyboardButton("📅 Cal. ESG",        callback_data="menu_do_esg_cal"),
+         InlineKeyboardButton("⚡ Tariffe RS Gas",  callback_data="menu_do_tariffe")],
+        [InlineKeyboardButton("💡 Incentivi",       callback_data="menu_do_incentivi"),
+         InlineKeyboardButton("🌍 Mercato",         callback_data="menu_do_mercato")],
+        [InlineKeyboardButton("◀ Menu principale", callback_data="menu_home")],
+    ])
+
+def kb_menu_report() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Report KPI",      callback_data="menu_do_report"),
+         InlineKeyboardButton("⚡ KPI RS Gas",      callback_data="menu_do_rsgas")],
+        [InlineKeyboardButton("✅ Task aperti",      callback_data="menu_do_tasks"),
+         InlineKeyboardButton("✍️ Contenuti",       callback_data="menu_do_contenuti")],
+        [InlineKeyboardButton("◀ Menu principale", callback_data="menu_home")],
+    ])
+
+def kb_menu_aios() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 Orchestratore",   callback_data="menu_do_orchestra"),
+         InlineKeyboardButton("🏠 Landing Page",    callback_data="menu_do_landing")],
+        [InlineKeyboardButton("📋 Lead Magnet",     callback_data="menu_do_leadmagnet"),
+         InlineKeyboardButton("🔄 Cross-sell",      callback_data="menu_do_crosssell")],
+        [InlineKeyboardButton("👥 Clienti",         callback_data="menu_do_clienti"),
+         InlineKeyboardButton("🔎 SEO",             callback_data="menu_do_seo")],
+        [InlineKeyboardButton("◀ Menu principale", callback_data="menu_home")],
+    ])
+
+def kb_menu_sistema() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("ℹ️ Stato sistema",   callback_data="menu_do_stato"),
+         InlineKeyboardButton("📤 Mittente",         callback_data="menu_do_mittente")],
+        [InlineKeyboardButton("🗑 Annulla sessione", callback_data="menu_do_annulla")],
+        [InlineKeyboardButton("◀ Menu principale", callback_data="menu_home")],
+    ])
+
+
 def formatta_briefing(ora: str, sr: dict, sa: dict) -> str:
     return (f"🤖 *Briefing Agenti AI — {ora}*\n\n"
             f"⚡ *Renergy Project\\&Build*\n"
@@ -896,52 +983,11 @@ async def cmd_stato(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_sessione(update.effective_chat.id)
     await update.message.reply_text(
-        "👋 *Bot Agenti AI — Sistema Completo*\n\n"
-        "🔍 *Lead Generation:*\n"
-        "/run\\_all — Renergy \\+ ACM\n"
-        "/renergy — solo Renergy\n"
-        "/acm — solo ACM\n"
-        "/lead — ultimi lead in Hub\n\n"
-        "📬 *Campagne & Mercato:*\n"
-        "/nuova\\_campagna — crea campagna outbound\n"
-        "/campagne — lista campagne\n"
-        "/mercato — market intelligence\n"
-        "/risposte — risposte email campagne\n\n"
-        "📋 *Task Tracker:*\n"
-        "/task — crea task da testo\n"
-        "/tasks — lista task aperti\n\n"
-        "✍️ *Content & SEO:*\n"
-        "/content — genera post LinkedIn/blog\n"
-        "/contenuti — coda contenuti\n"
-        "/seo — analisi SEO\n\n"
-        "🕵️ *Intelligence:*\n"
-        "/competitor — monitor competitor\n"
-        "/esg — monitor ESG/CSRD\n"
-        "/esg\\_cal — calendario scadenze ESG\n\n"
-        "📊 *Report:*\n"
-        "/report — KPI settimanale\n"
-        "/rsgas — aggiorna KPI RS Gas\\&Power\n\n"
-        "🧠 *AIOS — Cervello commerciale:*\n"
-        "/orchestra — proposte commerciali dagli insight\n"
-        "/landing — genera landing page \\+ pubblicazione sul sottodominio\n"
-        "/leadmagnet — brief PDF ESG per ACM \\(lead magnet\\)\n"
-        "/crosssell — opportunità cross\\-sell tra le aziende\n"
-        "/clienti — upsell \\& referral su clienti esistenti\n\n"
-        "⚡🔵 *RS Gas\\&Power — Intelligence:*\n"
-        "/tariffe — monitor tariffe competitor\n"
-        "/prospect\\_rsgas — nuovi prospect qualificati\n\n"
-        "🇮🇹 *Renergy — Incentivi:*\n"
-        "/incentivi — bandi nazionali \\+ Veneto/Trentino\\-AA/FVG\n\n"
-        "📨 *Newsletter:*\n"
-        "/newsletter — genera/gestisci bozze\n"
-        "/nl\\_stats — statistiche newsletter\n"
-        "/nl\\_iscrivi — aggiungi iscritto\n\n"
-        "🎙️ *Appunti → Email:*\n"
-        "Manda vocale o testo con i tuoi appunti\n\n"
-        "/mittente — cambia account invio\n"
-        "/stato — stato sistema\n"
-        "/annulla — annulla sessione",
-        parse_mode="MarkdownV2"
+        "👋 *AIOS v2\\.0 — Sistema Commerciale AI*\n"
+        "Renergy · RS Gas · ACM\n\n"
+        "Scegli un'area:",
+        parse_mode="MarkdownV2",
+        reply_markup=kb_menu_principale(),
     )
 
 @solo_owner
@@ -1141,6 +1187,73 @@ async def handler_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     await q.answer()
+
+    # ---------------------------------------------------------------------------
+    # Menu gerarchico — Proposta A
+    # ---------------------------------------------------------------------------
+    _MENU_TESTI = {
+        "menu_home":     ("👋 *AIOS v2\\.0 — Menu Principale*\nScegli un'area:", kb_menu_principale),
+        "menu_lead":     ("📊 *Lead Generation*\nSeleziona operazione:",          kb_menu_lead),
+        "menu_campagne": ("📣 *Campagne & Newsletter*\nSeleziona operazione:",    kb_menu_campagne),
+        "menu_intel":    ("🧠 *Intelligence & Monitoraggio*\nSeleziona:",         kb_menu_intel),
+        "menu_report":   ("📄 *Report & Analisi*\nSeleziona operazione:",         kb_menu_report),
+        "menu_aios":     ("⚙️ *AIOS — Cervello commerciale*\nSeleziona:",         kb_menu_aios),
+        "menu_sistema":  ("🔧 *Sistema*\nSeleziona operazione:",                  kb_menu_sistema),
+    }
+    if data in _MENU_TESTI:
+        testo, kb_fn = _MENU_TESTI[data]
+        await q.edit_message_text(testo, parse_mode="MarkdownV2", reply_markup=kb_fn())
+        return
+
+    if data.startswith("menu_do_"):
+        comando = data[len("menu_do_"):]
+        # Per comandi con dialogo interattivo mostra il comando da usare
+        _solo_cmd = {"nuova_campagna", "campagne", "mercato", "risposte",
+                     "newsletter", "nl_stats", "nl_iscrivi", "content",
+                     "contenuti", "seo", "task", "tasks"}
+        if comando in _solo_cmd:
+            await q.edit_message_text(
+                f"▶ Usa il comando:\n`/{comando}`",
+                parse_mode="Markdown"
+            )
+            return
+        # Per agenti in background: avvia direttamente
+        await q.edit_message_text(f"⏳ /{comando} in avvio\\.\\.\\.", parse_mode="MarkdownV2")
+        _bg_map = {
+            "run_all":        (cmd_run_all,),
+            "renergy":        (cmd_renergy,),
+            "acm":            (cmd_acm,),
+            "lead":           (cmd_lead,),
+            "prospect_rsgas": (cmd_prospect_rsgas,),
+            "orchestra":      (cmd_orchestra,),
+            "tariffe":        (cmd_tariffe,),
+            "incentivi":      (cmd_incentivi,),
+            "landing":        (cmd_landing,),
+            "leadmagnet":     (cmd_leadmagnet,),
+            "crosssell":      (cmd_crosssell,),
+            "clienti":        (cmd_clienti,),
+            "report":         (cmd_report,),
+            "rsgas":          (cmd_rsgas,),
+            "stato":          (cmd_stato,),
+            "mittente":       (cmd_mittente,),
+            "annulla":        (cmd_annulla,),
+        }
+        fn_tuple = _bg_map.get(comando)
+        if fn_tuple:
+            fn = fn_tuple[0]
+            # Adatta il contesto: usa effective_message al posto di message
+            class _FakeUpdate:
+                def __init__(self, orig):
+                    self._orig = orig
+                    self.message = orig.effective_message
+                    self.effective_chat = orig.effective_chat
+                    self.effective_user = orig.effective_user
+                    self.effective_message = orig.effective_message
+                    self.callback_query = orig.callback_query
+            await fn(_FakeUpdate(update), ctx)
+        else:
+            await ctx.bot.send_message(chat_id, f"⚠️ Comando /{comando} non ancora disponibile dal menu.")
+        return
 
     # Mittente email
     if data.startswith("mittente_"):
