@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIOS v2.0 — Pannello Commerciale</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d2e;
+  --surface2: #242740;
+  --border: #2e3250;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --renergy: #4ade80;
+  --renergy-bg: rgba(74,222,128,0.12);
+  --rsgas: #60a5fa;
+  --rsgas-bg: rgba(96,165,250,0.12);
+  --acm: #a3e635;
+  --acm-bg: rgba(163,230,53,0.12);
+  --radius: 10px;
+  --shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+[data-theme="light"] {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --text2: #64748b;
+  --renergy: #166534;
+  --renergy-bg: rgba(22,101,52,0.08);
+  --rsgas: #1e40af;
+  --rsgas-bg: rgba(30,64,175,0.08);
+  --acm: #3f6212;
+  --acm-bg: rgba(63,98,18,0.08);
+  --shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+a { color: var(--accent); text-decoration: none; }
+
+/* Layout */
+.layout { display: flex; height: 100vh; overflow: hidden; }
+
+/* Sidebar */
+.sidebar {
+  width: 220px; min-width: 220px; background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 0; overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 20px 16px 12px;
+  font-size: 15px; font-weight: 700; color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-logo span { color: var(--accent); }
+.sidebar-logo sub { font-size: 10px; font-weight: 400; color: var(--text2); display: block; margin-top: 2px; }
+.nav { flex: 1; padding: 10px 0; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; cursor: pointer;
+  color: var(--text2); font-weight: 500;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--surface2); color: var(--accent); border-left-color: var(--accent); }
+.nav-item .ico { font-size: 16px; width: 20px; text-align: center; }
+.sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+
+/* Main */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Topbar */
+.topbar {
+  height: 56px; min-height: 56px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px; gap: 12px;
+}
+.topbar-title { font-weight: 600; font-size: 15px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+.topbar-date { font-size: 12px; color: var(--text2); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 7px; border: none;
+  cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: all 0.15s; font-family: inherit;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-xs { padding: 3px 8px; font-size: 11px; }
+.btn-ok { background: rgba(34,197,94,0.15); color: var(--ok); border: 1px solid rgba(34,197,94,0.3); }
+.btn-err { background: rgba(239,68,68,0.15); color: var(--err); border: 1px solid rgba(239,68,68,0.3); }
+.btn-warn { background: rgba(245,158,11,0.15); color: var(--warn); border: 1px solid rgba(245,158,11,0.3); }
+
+/* Content area */
+.content { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* Views */
+.view { display: none; }
+.view.active { display: block; }
+
+/* KPI strip */
+.kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.kpi-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.kpi-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.kpi-value { font-size: 28px; font-weight: 700; line-height: 1; }
+.kpi-sub { font-size: 11px; color: var(--text2); }
+.kpi-renergy { border-top: 3px solid var(--renergy); }
+.kpi-rsgas   { border-top: 3px solid var(--rsgas); }
+.kpi-acm     { border-top: 3px solid var(--acm); }
+.kpi-blue    { border-top: 3px solid var(--accent); }
+
+/* Grid 2 col */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* Card */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.card-header {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  font-weight: 600; font-size: 13px;
+}
+.card-body { padding: 0; }
+
+/* Table */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th {
+  padding: 10px 14px; text-align: left; font-size: 11px;
+  font-weight: 600; color: var(--text2); text-transform: uppercase;
+  letter-spacing: 0.4px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+}
+.tbl td {
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-size: 13px; vertical-align: middle;
+}
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr:hover td { background: var(--surface2); }
+
+/* Badges */
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600;
+}
+.badge-renergy { background: var(--renergy-bg); color: var(--renergy); }
+.badge-rsgas   { background: var(--rsgas-bg); color: var(--rsgas); }
+.badge-acm     { background: var(--acm-bg); color: var(--acm); }
+.badge-alta    { background: rgba(239,68,68,0.15); color: var(--err); }
+.badge-media   { background: rgba(245,158,11,0.15); color: var(--warn); }
+.badge-bassa   { background: rgba(34,197,94,0.15); color: var(--ok); }
+.badge-ok      { background: rgba(34,197,94,0.15); color: var(--ok); }
+.badge-avviato { background: rgba(245,158,11,0.15); color: var(--warn); }
+.badge-error   { background: rgba(239,68,68,0.15); color: var(--err); }
+
+/* Run log */
+.run-log-row { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.run-log-row:last-child { border-bottom: none; }
+.run-log-ts { color: var(--text2); min-width: 70px; }
+.run-log-agent { font-weight: 600; min-width: 110px; }
+.run-log-detail { color: var(--text2); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Intel cards */
+.intel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.intel-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.intel-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.intel-card-title { font-weight: 600; font-size: 13px; line-height: 1.3; }
+.intel-card-sintesi { font-size: 12px; color: var(--text2); line-height: 1.5; }
+.intel-card-footer { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+
+/* Filter bar */
+.filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.filter-bar select, .filter-bar input {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); border-radius: 7px; padding: 7px 12px;
+  font-size: 13px; font-family: inherit;
+}
+.filter-bar select:focus, .filter-bar input:focus { outline: 2px solid var(--accent); }
+
+/* Agent grid */
+.agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.agent-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+}
+.agent-ico { font-size: 28px; }
+.agent-name { font-weight: 600; font-size: 13px; }
+.agent-desc { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+/* Landing form */
+.form-group { margin-bottom: 14px; }
+.form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+.form-control {
+  width: 100%; background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); border-radius: 7px; padding: 9px 12px;
+  font-size: 13px; font-family: inherit; transition: border-color 0.15s;
+}
+.form-control:focus { outline: none; border-color: var(--accent); }
+textarea.form-control { resize: vertical; min-height: 80px; }
+
+/* Landing preview */
+.landing-preview {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+  max-height: 300px; overflow-y: auto;
+}
+
+/* Spinner */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Theme toggle */
+.theme-toggle {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); border-radius: 7px; padding: 6px 10px;
+  cursor: pointer; font-size: 15px; line-height: 1;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* Toast */
+#toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 18px;
+  box-shadow: var(--shadow); font-size: 13px;
+  display: none; z-index: 9999; max-width: 320px;
+}
+
+/* Empty state */
+.empty { padding: 40px; text-align: center; color: var(--text2); font-size: 13px; }
+
+/* Section title */
+.section-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+
+/* Loading overlay */
+.loading { display: flex; align-items: center; gap: 8px; color: var(--text2); font-size: 13px; padding: 16px; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <span>AIOS</span> v2.0
+      <sub>Sistema Commerciale AI</sub>
+    </div>
+    <div class="nav">
+      <div class="nav-item active" onclick="goView('dashboard')">
+        <span class="ico">📊</span> Dashboard
+      </div>
+      <div class="nav-item" onclick="goView('lead')">
+        <span class="ico">👥</span> Lead
+      </div>
+      <div class="nav-item" onclick="goView('intelligence')">
+        <span class="ico">🧠</span> Intelligence
+      </div>
+      <div class="nav-item" onclick="goView('agenti')">
+        <span class="ico">⚙️</span> Agenti
+      </div>
+      <div class="nav-item" onclick="goView('landing')">
+        <span class="ico">🌐</span> Landing
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      Renergy · RS Gas · ACM
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-title" id="topbar-title">Dashboard</div>
+      <div class="topbar-actions">
+        <span class="topbar-date" id="topbar-date"></span>
+        <button class="btn btn-primary btn-sm" onclick="avviaOrchestrator()">
+          ▶ Orchestratore
+        </button>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Tema">🌓</button>
+      </div>
+    </header>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- DASHBOARD VIEW -->
+      <div class="view active" id="view-dashboard">
+        <div class="kpi-strip" id="kpi-strip">
+          <div class="loading"><span class="spinner"></span> Carico KPI…</div>
+        </div>
+        <div class="grid2">
+          <div class="card">
+            <div class="card-header">
+              📋 Run recenti
+              <button class="btn btn-secondary btn-xs" onclick="refreshRunLog()">↻</button>
+            </div>
+            <div class="card-body" id="run-log-body">
+              <div class="loading"><span class="spinner"></span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">🧠 Insight urgenti</div>
+            <div class="card-body" id="urgent-body">
+              <div class="loading"><span class="spinner"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LEAD VIEW -->
+      <div class="view" id="view-lead">
+        <div class="filter-bar">
+          <select id="lead-azienda" onchange="loadLeads()">
+            <option value="">Tutte le aziende</option>
+            <option value="Renergy">☀️ Renergy</option>
+            <option value="RS_Gas">⚡ RS Gas</option>
+            <option value="ACM">🌿 ACM</option>
+          </select>
+          <select id="lead-n" onchange="loadLeads()">
+            <option value="30">30 lead</option>
+            <option value="50">50 lead</option>
+            <option value="100">100 lead</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadLeads()">↻ Aggiorna</button>
+          <span id="lead-count" style="color:var(--text2);font-size:12px;margin-left:4px;"></span>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>Nominativo</th>
+                  <th>Azienda</th>
+                  <th>Società</th>
+                  <th>Stato</th>
+                  <th>Contatto</th>
+                </tr>
+              </thead>
+              <tbody id="lead-tbody">
+                <tr><td colspan="5" class="empty">Carico…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- INTELLIGENCE VIEW -->
+      <div class="view" id="view-intelligence">
+        <div class="filter-bar">
+          <select id="intel-azienda" onchange="loadIntel()">
+            <option value="">Tutte le aziende</option>
+            <option value="Renergy">☀️ Renergy</option>
+            <option value="RS_Gas">⚡ RS Gas</option>
+            <option value="ACM">🌿 ACM</option>
+          </select>
+          <select id="intel-urgenza" onchange="loadIntel()">
+            <option value="">Tutte le urgenze</option>
+            <option value="alta">🔴 Alta</option>
+            <option value="media">🟡 Media</option>
+            <option value="bassa">🟢 Bassa</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadIntel()">↻ Aggiorna</button>
+          <span id="intel-count" style="color:var(--text2);font-size:12px;margin-left:4px;"></span>
+        </div>
+        <div class="intel-grid" id="intel-grid">
+          <div class="loading"><span class="spinner"></span> Carico intelligence…</div>
+        </div>
+      </div>
+
+      <!-- AGENTI VIEW -->
+      <div class="view" id="view-agenti">
+        <div class="section-title">Avvia Agenti</div>
+        <div class="agent-grid" id="agent-grid"></div>
+        <div style="margin-top:20px;">
+          <div class="card">
+            <div class="card-header">
+              📋 Log esecuzioni
+              <button class="btn btn-secondary btn-xs" onclick="refreshRunLog(true)">↻</button>
+            </div>
+            <div class="card-body" id="run-log-body-2">
+              <div class="loading"><span class="spinner"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LANDING VIEW -->
+      <div class="view" id="view-landing">
+        <div class="grid2">
+          <div>
+            <div class="section-title">Genera Landing Page</div>
+            <div class="form-group">
+              <label class="form-label">Società</label>
+              <select class="form-control" id="land-societa">
+                <option value="Renergy">☀️ Renergy Project&amp;Build</option>
+                <option value="RS_Gas">⚡ RS Gas&amp;Power</option>
+                <option value="ACM">🌿 ACM&amp;Partners</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Titolo (opzionale)</label>
+              <input type="text" class="form-control" id="land-titolo" placeholder="Es. Incentivi Fotovoltaico 2024">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Brief / Contenuto</label>
+              <textarea class="form-control" id="land-brief" rows="5" placeholder="Descrivi l'offerta, il target, i messaggi chiave…"></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="generaLanding()" id="btn-genera">
+              ✨ Genera
+            </button>
+          </div>
+          <div>
+            <div class="section-title">Anteprima</div>
+            <div id="landing-preview-box">
+              <div class="empty">La preview apparirà dopo la generazione.</div>
+            </div>
+            <div id="landing-pubblica-box" style="margin-top:12px;display:none;">
+              <button class="btn btn-ok" onclick="pubblicaLanding()" id="btn-pubblica">
+                🚀 Pubblica Landing
+              </button>
+              <span id="pubblica-status" style="margin-left:10px;font-size:12px;color:var(--text2);"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<div id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────
+let currentView = 'dashboard';
+let autoRefreshTimer = null;
+let currentLandId = null;
+
+const VIEWS = {
+  dashboard:   'Dashboard',
+  lead:        'Lead',
+  intelligence:'Intelligence',
+  agenti:      'Agenti',
+  landing:     'Landing Page',
+};
+
+const AGENTS = [
+  { id: 'orchestratore',  ico: '🧠', name: 'Orchestratore',  desc: 'Briefing commerciale giornaliero' },
+  { id: 'tariffe',        ico: '💡', name: 'Tariffe RS',      desc: 'Monitora tariffe energia' },
+  { id: 'incentivi',      ico: '☀️', name: 'Incentivi',       desc: 'Incentivi fotovoltaico Renergy' },
+  { id: 'crosssell',      ico: '🔗', name: 'Cross-sell',      desc: 'Opportunità cross-selling' },
+  { id: 'prospect_rsgas', ico: '⚡', name: 'Prospect RS Gas', desc: 'Nuovi prospect gas/energia' },
+  { id: 'clienti',        ico: '👥', name: 'Clienti',         desc: 'Analisi portafoglio clienti' },
+  { id: 'report',         ico: '📄', name: 'Report',          desc: 'Genera report commerciale' },
+  { id: 'competitor',     ico: '🎯', name: 'Competitor',      desc: 'Monitor concorrenza' },
+  { id: 'esg',            ico: '🌱', name: 'ESG Monitor',     desc: 'Monitoraggio ESG' },
+];
+
+// ─────────────────────────────────────────────
+// Navigation
+// ─────────────────────────────────────────────
+function goView(v) {
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.getElementById('view-' + v).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(el => {
+    if (el.getAttribute('onclick') && el.getAttribute('onclick').includes("'" + v + "'")) {
+      el.classList.add('active');
+    }
+  });
+  document.getElementById('topbar-title').textContent = VIEWS[v] || v;
+  currentView = v;
+  loadView(v);
+}
+
+function loadView(v) {
+  if (v === 'dashboard')    { loadKPI(); loadRunLog(); loadUrgent(); }
+  if (v === 'lead')         { loadLeads(); }
+  if (v === 'intelligence') { loadIntel(); }
+  if (v === 'agenti')       { renderAgentGrid(); refreshRunLog(true); }
+}
+
+// ─────────────────────────────────────────────
+// Date
+// ─────────────────────────────────────────────
+function updateDate() {
+  const d = new Date();
+  document.getElementById('topbar-date').textContent =
+    d.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// ─────────────────────────────────────────────
+// Theme
+// ─────────────────────────────────────────────
+function toggleTheme() {
+  const html = document.documentElement;
+  const t = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', t);
+  localStorage.setItem('aios-theme', t);
+}
+
+// ─────────────────────────────────────────────
+// Toast
+// ─────────────────────────────────────────────
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = (type === 'err' ? '❌ ' : type === 'ok' ? '✅ ' : 'ℹ️ ') + msg;
+  el.style.display = 'block';
+  el.style.borderColor = type === 'err' ? 'var(--err)' : type === 'ok' ? 'var(--ok)' : 'var(--border)';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+// ─────────────────────────────────────────────
+// Fetch helper
+// ─────────────────────────────────────────────
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+  return res.json();
+}
+
+// ─────────────────────────────────────────────
+// Badge helpers
+// ─────────────────────────────────────────────
+function azBadge(az) {
+  const map = { Renergy: 'renergy', RS_Gas: 'rsgas', 'RS Gas': 'rsgas', ACM: 'acm' };
+  const cls = map[az] || '';
+  const ico = { Renergy: '☀️', RS_Gas: '⚡', 'RS Gas': '⚡', ACM: '🌿' }[az] || '🏢';
+  return cls ? `<span class="badge badge-${cls}">${ico} ${az}</span>` : `<span class="badge">${az}</span>`;
+}
+
+function urgBadge(u) {
+  const map = { alta: '🔴', media: '🟡', bassa: '🟢' };
+  return `<span class="badge badge-${u}">${(map[u] || '')} ${u || '-'}</span>`;
+}
+
+function esitoBadge(e) {
+  const cls = { ok: 'ok', avviato: 'avviato', error: 'error' }[e] || 'avviato';
+  return `<span class="badge badge-${cls}">${e}</span>`;
+}
+
+// ─────────────────────────────────────────────
+// KPI
+// ─────────────────────────────────────────────
+async function loadKPI() {
+  const el = document.getElementById('kpi-strip');
+  el.innerHTML = '<div class="loading"><span class="spinner"></span> Carico KPI…</div>';
+  try {
+    const d = await api('/api/kpi');
+    if (d.error) throw new Error(d.error);
+    const pa = d.per_azienda || {};
+    el.innerHTML = `
+      <div class="kpi-card kpi-blue">
+        <div class="kpi-label">Insight attivi</div>
+        <div class="kpi-value">${d.insights_attivi ?? '-'}</div>
+        <div class="kpi-sub">${d.urgenti ?? 0} urgenti</div>
+      </div>
+      <div class="kpi-card kpi-blue">
+        <div class="kpi-label">Lead totali</div>
+        <div class="kpi-value">${d.lead_totali ?? '-'}</div>
+        <div class="kpi-sub">nel CRM</div>
+      </div>
+      <div class="kpi-card kpi-renergy">
+        <div class="kpi-label">☀️ Renergy</div>
+        <div class="kpi-value">${pa.Renergy ?? 0}</div>
+        <div class="kpi-sub">insight</div>
+      </div>
+      <div class="kpi-card kpi-rsgas">
+        <div class="kpi-label">⚡ RS Gas</div>
+        <div class="kpi-value">${pa.RS_Gas ?? 0}</div>
+        <div class="kpi-sub">insight</div>
+      </div>
+      <div class="kpi-card kpi-acm">
+        <div class="kpi-label">🌿 ACM</div>
+        <div class="kpi-value">${pa.ACM ?? 0}</div>
+        <div class="kpi-sub">insight</div>
+      </div>
+    `;
+  } catch(e) {
+    el.innerHTML = `<div class="empty">Errore KPI: ${e.message}</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Run log
+// ─────────────────────────────────────────────
+async function loadRunLog() {
+  refreshRunLog(false);
+}
+
+async function refreshRunLog(secondary) {
+  const ids = secondary ? ['run-log-body', 'run-log-body-2'] : ['run-log-body'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    try {
+      const d = await api('/api/run-log');
+      const logs = d.log || [];
+      if (!logs.length) {
+        el.innerHTML = '<div class="empty">Nessuna esecuzione registrata.</div>';
+        continue;
+      }
+      el.innerHTML = logs.slice(0, 15).map(r => `
+        <div class="run-log-row">
+          <span class="run-log-ts">${r.ts}</span>
+          <span class="run-log-agent">${r.agente}</span>
+          ${esitoBadge(r.esito)}
+          <span class="run-log-detail">${r.dettaglio || ''}</span>
+        </div>
+      `).join('');
+    } catch(e) {
+      el.innerHTML = `<div class="empty">Errore: ${e.message}</div>`;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// Urgent insights (dashboard widget)
+// ─────────────────────────────────────────────
+async function loadUrgent() {
+  const el = document.getElementById('urgent-body');
+  try {
+    const d = await api('/api/intelligence?urgenza=alta&limit=10');
+    const ins = d.insights || [];
+    if (!ins.length) { el.innerHTML = '<div class="empty">Nessun insight urgente.</div>'; return; }
+    el.innerHTML = ins.map(i => `
+      <div class="run-log-row" style="flex-direction:column;align-items:flex-start;gap:4px;">
+        <div style="display:flex;gap:6px;align-items:center;">${azBadge(i.azienda)} ${urgBadge(i.urgenza)}</div>
+        <div style="font-weight:600;font-size:12px;">${i.titolo || '-'}</div>
+        <div style="color:var(--text2);font-size:11px;">${(i.sintesi || '').substring(0, 100)}${i.sintesi && i.sintesi.length > 100 ? '…' : ''}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = `<div class="empty">Errore: ${e.message}</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Leads
+// ─────────────────────────────────────────────
+async function loadLeads() {
+  const tbody = document.getElementById('lead-tbody');
+  const az = document.getElementById('lead-azienda').value;
+  const n  = document.getElementById('lead-n').value;
+  tbody.innerHTML = '<tr><td colspan="5" class="empty"><span class="spinner"></span> Carico…</td></tr>';
+  try {
+    let url = `/api/leads?n=${n}`;
+    if (az) url += `&azienda=${encodeURIComponent(az)}`;
+    const d = await api(url);
+    document.getElementById('lead-count').textContent = `${d.totale || 0} lead`;
+    const leads = d.leads || [];
+    if (!leads.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">Nessun lead trovato.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = leads.map(l => `
+      <tr>
+        <td><strong>${l.nome || l.name || '-'} ${l.cognome || l.surname || ''}</strong></td>
+        <td style="color:var(--text2)">${l.azienda_cliente || l.company || '-'}</td>
+        <td>${azBadge(l.azienda || l.societa || '')}</td>
+        <td>${l.stato ? `<span class="badge" style="background:var(--surface2)">${l.stato}</span>` : '-'}</td>
+        <td style="color:var(--text2)">${l.email || l.telefono || '-'}</td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">Errore: ${e.message}</td></tr>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Intelligence
+// ─────────────────────────────────────────────
+async function loadIntel() {
+  const grid = document.getElementById('intel-grid');
+  const az  = document.getElementById('intel-azienda').value;
+  const urg = document.getElementById('intel-urgenza').value;
+  grid.innerHTML = '<div class="loading"><span class="spinner"></span> Carico…</div>';
+  try {
+    let url = '/api/intelligence?limit=50';
+    if (az)  url += `&azienda=${encodeURIComponent(az)}`;
+    if (urg) url += `&urgenza=${encodeURIComponent(urg)}`;
+    const d = await api(url);
+    document.getElementById('intel-count').textContent = `${d.totale || 0} insight`;
+    const ins = d.insights || [];
+    if (!ins.length) {
+      grid.innerHTML = '<div class="empty">Nessun insight trovato.</div>';
+      return;
+    }
+    grid.innerHTML = ins.map(i => `
+      <div class="intel-card">
+        <div class="intel-card-header">
+          <div class="intel-card-title">${i.titolo || '-'}</div>
+          ${urgBadge(i.urgenza)}
+        </div>
+        <div class="intel-card-sintesi">${i.sintesi || ''}</div>
+        <div class="intel-card-footer">
+          ${azBadge(i.azienda)}
+          <span class="badge" style="background:var(--surface2);color:var(--text2)">${i.tipo || '-'}</span>
+          ${i.impatto_commerciale ? `<span class="badge" style="background:var(--surface2);color:var(--text2)">impatto: ${i.impatto_commerciale}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    grid.innerHTML = `<div class="empty">Errore: ${e.message}</div>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Agent grid
+// ─────────────────────────────────────────────
+function renderAgentGrid() {
+  const grid = document.getElementById('agent-grid');
+  grid.innerHTML = AGENTS.map(a => `
+    <div class="agent-card">
+      <div class="agent-ico">${a.ico}</div>
+      <div class="agent-name">${a.name}</div>
+      <div class="agent-desc">${a.desc}</div>
+      <button class="btn btn-secondary btn-sm" onclick="avviaAgent('${a.id}', this)" id="btn-agent-${a.id}">
+        ▶ Avvia
+      </button>
+    </div>
+  `).join('');
+}
+
+async function avviaAgent(id, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await api(`/api/agents/${id}/run`, { method: 'POST' });
+    toast(`Agente "${id}" avviato`, 'ok');
+    setTimeout(() => refreshRunLog(true), 1500);
+  } catch(e) {
+    toast(`Errore avvio ${id}: ${e.message}`, 'err');
+  }
+  setTimeout(() => { btn.disabled = false; btn.innerHTML = '▶ Avvia'; }, 2000);
+}
+
+async function avviaOrchestrator() {
+  try {
+    await api('/api/agents/orchestratore/run', { method: 'POST' });
+    toast('Orchestratore avviato', 'ok');
+    setTimeout(() => refreshRunLog(false), 2000);
+  } catch(e) {
+    toast('Errore: ' + e.message, 'err');
+  }
+}
+
+// ─────────────────────────────────────────────
+// Landing
+// ─────────────────────────────────────────────
+async function generaLanding() {
+  const btn = document.getElementById('btn-genera');
+  const societa = document.getElementById('land-societa').value;
+  const titolo  = document.getElementById('land-titolo').value.trim();
+  const brief   = document.getElementById('land-brief').value.trim();
+  if (!brief) { toast('Inserisci il brief', 'err'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Genero…';
+  document.getElementById('landing-preview-box').innerHTML = '<div class="loading"><span class="spinner"></span> Generazione in corso…</div>';
+  document.getElementById('landing-pubblica-box').style.display = 'none';
+
+  try {
+    const d = await api('/api/landing/genera', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ societa, titolo, brief }),
+    });
+    if (!d.ok) throw new Error(d.error || 'Generazione fallita');
+    const land = d.landing || {};
+    currentLandId = land.id || land.land_id || null;
+    document.getElementById('landing-preview-box').innerHTML = `
+      <div class="landing-preview">${JSON.stringify(land, null, 2)}</div>
+    `;
+    if (currentLandId) {
+      document.getElementById('landing-pubblica-box').style.display = 'block';
+      document.getElementById('pubblica-status').textContent = `ID: ${currentLandId}`;
+    }
+    toast('Landing generata', 'ok');
+  } catch(e) {
+    document.getElementById('landing-preview-box').innerHTML = `<div class="empty">Errore: ${e.message}</div>`;
+    toast('Errore generazione: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '✨ Genera';
+}
+
+async function pubblicaLanding() {
+  if (!currentLandId) { toast('Genera prima una landing', 'err'); return; }
+  const btn = document.getElementById('btn-pubblica');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Pubblico…';
+  try {
+    const d = await api(`/api/landing/${currentLandId}/pubblica`, { method: 'POST' });
+    if (!d.ok) throw new Error(d.error || 'Pubblicazione fallita');
+    document.getElementById('pubblica-status').textContent = '✅ Pubblicata!';
+    toast('Landing pubblicata', 'ok');
+  } catch(e) {
+    document.getElementById('pubblica-status').textContent = '❌ ' + e.message;
+    toast('Errore pubblicazione: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🚀 Pubblica Landing';
+}
+
+// ─────────────────────────────────────────────
+// Auto-refresh ogni 60s
+// ─────────────────────────────────────────────
+function startAutoRefresh() {
+  clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(() => {
+    if (currentView === 'dashboard') { loadKPI(); loadRunLog(); loadUrgent(); }
+    if (currentView === 'agenti')    { refreshRunLog(true); }
+  }, 60000);
+}
+
+// ─────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────
+(function init() {
+  const savedTheme = localStorage.getItem('aios-theme');
+  if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+  updateDate();
+  loadView('dashboard');
+  startAutoRefresh();
+})();
+</script>
+</body>
+</html>
